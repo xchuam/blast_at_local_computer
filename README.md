@@ -13,7 +13,7 @@ This Jupyter notebook **Blast_at_local_computer.ipynb** should be ran in a linux
 * `ncbi-blast+` 
 
 There are several advantages of this tool:
-* The genome downloading function can be used to easily download **a large set of genome data* from NCBI.
+* The genome downloading function can be used to easily download **a large set of genome data** from NCBI.
 * Compared to the online NCBI BLAST, the local custom genome database can also include non-NCBI genome data.
 * Compared to the online NCBI BLAST, there is **no maximum limitation** of the hit number. 
 * The local custom genome database can be **easily updated**. 
