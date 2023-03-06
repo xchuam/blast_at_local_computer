@@ -892,7 +892,7 @@ def merge_seq(query, extract_seq_path):
         
 def blast_result_seq(blastdb_path = "Data/blast_db/",
                      blast_output_path = 'Data/blast_output/',
-                     queiry_path = 'Data/example_query.fas',
+                     query_path = 'Data/example_query.fas',
                      extract_seq_path = "Data/extract_seq/",
                      dtypes = {0: str, 1: str, 2: float, 3: int, 4: int, 5: int, 6: int, 7: int, 8: int, 9: int, 10: float, 11: float, 12:int},
                      blastdbcmd_bin = "blastdbcmd",
@@ -924,7 +924,7 @@ def blast_result_seq(blastdb_path = "Data/blast_db/",
     mission_lst = list(np.array_split(file_names, process_num))
 
     #get query list
-    dict_1 = SeqIO.to_dict(SeqIO.parse(queiry_path,
+    dict_1 = SeqIO.to_dict(SeqIO.parse(query_path,
                                "fasta"))
     query_list = dict_1.keys()
     
