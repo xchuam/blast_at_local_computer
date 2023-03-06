@@ -961,36 +961,113 @@ def blast_result_seq(blastdb_path = "Data/blast_db/",
     end_time_external = time.time()
     print("final time usage " + str(end_time_external - start_time_external))
     print(time.asctime())
+
+def extract_tab(df,
+                process_id,
+                blast_op_path,
+                extract_tab_path,
+                dtypes): 
+    """extract BLAST result from one output file"""
     
+    df_path = blast_op_path + "/" + df
+    output_path = extract_tab_path
+
+    try:
+        blast_df = pd.read_csv(df_path, sep="\t", header=None, index_col=0, dtype=dtypes)
+        
+        for q in blast_df.index:
+            save_df_dir = output_path + str(process_id) + "_" + q + ".tab"
+            blast_df.loc[q:q].to_csv(save_df_dir, header=False, sep="\t", mode = "a")
+    except Exception as ex:
+        error_report = df_path + " <> " + str((type(ex))) + " " + str(ex.args) + "\n"
+        op = open("extract_tab_error.txt", "a")
+        op.write(error_report)
+        op.close()
+
+def extract_tab_list(df_list, process_id, blast_op_path, extract_tab_path, dtypes):
+    """function to extract result tab file based on a list of blast output df""" 
+    for x in df_list:
+        extract_tab(x, process_id, blast_op_path, extract_tab_path, dtypes)
+
+def merge_tab(query, extract_tab_path, columns):
+    """function to merge extract tab output from different threads"""
+    
+    tab_file_ls = extract_tab_path  + "*_" + query + ".tab"
+    total_extract_tab = extract_tab_path  + query + "_total.tab"
+    cat_command = "cat " + tab_file_ls + " > " + total_extract_tab
+    rm_command = "rm " + tab_file_ls
+    
+    head_line = " \t ".join(columns)
+    sed_command = "sed -i '1i\\" + head_line + "' " + total_extract_tab
+    
+    subprocess.run(cat_command, shell = True)
+    subprocess.run(rm_command, shell = True)
+    subprocess.run(sed_command, shell = True) # add head to each tab file
+
+
 def blast_result_df(blast_output_path = 'Data/blast_output/',
-                    extract_df_path = "Data/extract_tab/",
-                    dtypes = {0: str, 1: str, 2: float, 3: int, 4: int, 5: int, 6: int, 7: int, 8: int, 9: int, 10: float, 11: float, 12:int},
-                    columns = ["query_id", "subject_id", "pct_identity", "alignment_length", "mismatches", "gap_opens", "q_start", "q_end", "s_start", "s_end", "evalue", "bit_score", "s_total_length"],
-                    queiry_path = 'Data/example_query.fas'):
-    
-    if os.path.exists(extract_df_path):
+                     query_path = 'Data/example_query.fas',
+                     extract_tab_path = "Data/extract_tab/",
+                     dtypes = {0: str, 1: str, 2: float, 3: int, 4: int, 5: int, 6: int, 7: int, 8: int, 9: int, 10: float, 11: float, 12:int},
+                     columns = ["query_id", "subject_id", "pct_identity", "alignment_length", "mismatches", "gap_opens", "q_start", "q_end", "s_start", "s_end", "evalue", "bit_score", "s_total_length"],
+                     process_num = 1):
+    """Extract the BLAST result tab file from the BLAST results in several process
+    Args: 
+        blast_output_path: path to blast output tab file
+        query_path: path to query file for blast
+        extract_tab_path: path to save the extract tab files
+        dtypes: data type for each column in blast output tab file
+        columns: the name of each column in the tab files
+        process_num: threads number
+    """
+
+    if os.path.exists(extract_tab_path):
         pass
     else:
-        os.mkdir(extract_df_path)
+        os.mkdir(extract_tab_path)
         
-    #get query list
-    dict_1 = SeqIO.to_dict(SeqIO.parse(queiry_path,
-                               "fasta"))
-    query_list = dict_1.keys()
-        
-    #make tab file to store output
-    output_df = pd.DataFrame(columns=columns)
-    for q in list(query_list):
-        save_df_dir = extract_df_path + q + ".tab"
-        output_df.to_csv(save_df_dir, header = True, index=False, sep="\t", mode = "w")
-        
+    op = open("extract_tab_error.txt", "w")
+    op.write("")
+    op.close()
+
     #take output file names
-    file_names = os.listdir(blast_output_path)   
+    file_names = os.listdir(blast_output_path)
 
-    for i in file_names:
-        df_dir = blast_output_path + i
-        blast_df = pd.read_csv(df_dir, sep="\t", header=None, index_col=0, dtype=dtypes)
+    #splite blast result based on process number
+    mission_lst = list(np.array_split(file_names, process_num))
 
-        for q in blast_df.index:
-            save_df_dir = extract_df_path + q + ".tab"
-            blast_df.loc[q:q].to_csv(save_df_dir, header=False, sep="\t", mode = "a")
+    #get query list
+    dict_1 = SeqIO.to_dict(SeqIO.parse(query_path,
+                            "fasta"))
+    query_list = dict_1.keys()
+
+    #extract sequence in muilti threads
+    start_time_external = time.time()
+    print(time.asctime())
+
+    if __name__ == "blast_at_local_tools":
+
+        jobs = []
+
+        for x in range(0, process_num):
+            p = Process(target = extract_tab_list,
+                        args = (list(mission_lst[x]), 
+                                x, 
+                                blast_output_path, 
+                                extract_tab_path,
+                                dtypes
+                            )
+                    )
+            p.start()
+            jobs.append(p)
+
+
+        for z in jobs:
+            z.join()
+
+    for q in list(query_list):
+        merge_tab(q, extract_tab_path, columns)
+
+    end_time_external = time.time()
+    print("final time usage " + str(end_time_external - start_time_external))
+    print(time.asctime())
