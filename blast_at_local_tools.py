@@ -997,7 +997,7 @@ def merge_tab(query, extract_tab_path, columns):
     cat_command = "cat " + tab_file_ls + " > " + total_extract_tab
     rm_command = "rm " + tab_file_ls
     
-    head_line = " \t ".join(columns)
+    head_line = "\t".join(columns)
     sed_command = "sed -i '1i\\" + head_line + "' " + total_extract_tab
     
     subprocess.run(cat_command, shell = True)
