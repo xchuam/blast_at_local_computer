@@ -831,7 +831,9 @@ def extract_seq(df, process_id,
                 extract_seq_path, 
                 dtypes,
                 blastdbcmd_bin ):
-    """function to extract sequence based on one blast output df""" 
+    """function to extract sequence based on one blast output df
+    Note: the hit sequences that reach the start or end of the subject sequences are filtered out
+    """ 
 
     df_path = blast_op_path + "/" + df
     db_path = blast_db_path + "/" + df[0:-4] + "/" + df[0:-4]
@@ -898,6 +900,7 @@ def blast_result_seq(blastdb_path = "Data/blast_db/",
                      blastdbcmd_bin = "blastdbcmd",
                      process_num = 1):
     """Extract the sequences from the BLAST results in several process
+    Note: the hit sequences that reach the start or end of the subject sequences are filtered out
     Args: 
         blastdb_path:
         blast_output_path: path to blast output tab file
