@@ -8,7 +8,6 @@ Here we provide a tool **Blast_at_local_computer.ipynb** for the following works
 * extract BLAST hit sequences
 
 This Jupyter notebook **Blast_at_local_computer.ipynb** should be ran in a linux system, in which the following packages should be installed:
-* `parallel`
 * `rsync` 
 * `ncbi-blast+` 
 
