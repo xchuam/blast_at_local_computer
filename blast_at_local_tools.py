@@ -983,7 +983,7 @@ def extract_tab(df,
             q = blast_df.loc[i, 0]
 
             save_df_dir = output_path + str(process_id) + "_" + q + ".tab"
-            blast_df.loc[[i]].to_csv(save_df_dir, header=False, sep="\t", mode = "a")
+            blast_df.loc[[i]].to_csv(save_df_dir, header=False, sep="\t", mode = "a", index=False)
     except Exception as ex:
         error_report = df_path + " <> " + str((type(ex))) + " " + str(ex.args) + "\n"
         op = open("extract_tab_error.txt", "a")
