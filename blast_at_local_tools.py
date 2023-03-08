@@ -976,11 +976,14 @@ def extract_tab(df,
     output_path = extract_tab_path
 
     try:
-        blast_df = pd.read_csv(df_path, sep="\t", header=None, index_col=0, dtype=dtypes)
+        blast_df = pd.read_csv(df_path, sep="\t", header=None, dtype=dtypes)
         
-        for q in blast_df.index:
+        for i in set(blast_df.index):
+
+            q = blast_df.loc[i, 0]
+
             save_df_dir = output_path + str(process_id) + "_" + q + ".tab"
-            blast_df.loc[q:q].to_csv(save_df_dir, header=False, sep="\t", mode = "a")
+            blast_df.loc[[i]].to_csv(save_df_dir, header=False, sep="\t", mode = "a")
     except Exception as ex:
         error_report = df_path + " <> " + str((type(ex))) + " " + str(ex.args) + "\n"
         op = open("extract_tab_error.txt", "a")
