@@ -17,3 +17,6 @@ There are several advantages of this tool:
 * Compared to the online NCBI BLAST, there is **no maximum limitation** of the hit number. 
 * The local custom genome database can be **easily updated**. 
 * Compared to other local BLAST tools, this tool can provide not only BLAST result table but also **BLAST resulting hit sequences** for further analysis, such as phylogenetic tree construction. 
+
+## Citation
+If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper: http://dx.doi.org/10.2139/ssrn.4671025
