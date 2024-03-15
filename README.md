@@ -19,4 +19,6 @@ There are several advantages of this tool:
 * Compared to other local BLAST tools, this tool can provide not only BLAST result table but also **BLAST resulting hit sequences** for further analysis, such as phylogenetic tree construction. 
 
 ## Citation
-If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper: http://dx.doi.org/10.2139/ssrn.4671025
+If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper: 
+> Ma, X., Chen, J., Zwietering, M. H., Abee, T., & Den Besten, H. M. W. (2024). Stress resistant *rpsU* variants of *Listeria monocytogenes* can become underrepresented due to enrichment bias. International Journal of Food Microbiology, 110680. https://doi.org/10.1016/j.ijfoodmicro.2024.110680
+
