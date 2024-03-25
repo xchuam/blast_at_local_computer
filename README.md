@@ -20,5 +20,5 @@ There are several advantages of this tool:
 
 ## Citation
 If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper: 
-> Ma, X., Chen, J., Zwietering, M. H., Abee, T., & Den Besten, H. M. W. (2024). Stress resistant *rpsU* variants of *Listeria monocytogenes* can become underrepresented due to enrichment bias. International Journal of Food Microbiology, 110680. https://doi.org/10.1016/j.ijfoodmicro.2024.110680
+> Ma, X., Chen, J., Zwietering, M. H., Abee, T., & Den Besten, H. M. W. (2024). Stress resistant *rpsU* variants of *Listeria monocytogenes* can become underrepresented due to enrichment bias. International Journal of Food Microbiology, 416, 110680. https://doi.org/10.1016/j.ijfoodmicro.2024.110680
 
