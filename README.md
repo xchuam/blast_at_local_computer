@@ -1,4 +1,6 @@
-# BLAST at local computer
+# BLAST at local computer (V: cli_ed.0.1)
+**Current Version provides commandline compatible rsync download for large amount of genome from NCBI genome Datasets**
+
 Here we provide a tool **Blast_at_local_computer.ipynb** for the following works:
 * download genome data from NCBI
 * check downloaded genome data files by MD5 value
@@ -7,18 +9,96 @@ Here we provide a tool **Blast_at_local_computer.ipynb** for the following works
 * run BLAST search against the local custom genome database
 * extract BLAST hit sequences
 
-This Jupyter notebook **Blast_at_local_computer.ipynb** should be ran in a linux system, in which the following packages should be installed:
-* `rsync` 
-* `ncbi-blast+` 
+Although the original notebook still covers the end-to-end BLAST workflow, this CLI-focused release concentrates on the downloading and verification stages so you can prepare large collections of genomes for later analysis.
 
-There are several advantages of this tool:
-* The genome downloading function can be used to easily download **a large set of genome data** from NCBI.
-* Compared to the online NCBI BLAST, the local custom genome database can also include non-NCBI genome data.
-* Compared to the online NCBI BLAST, there is **no maximum limitation** of the hit number. 
-* The local custom genome database can be **easily updated**. 
-* Compared to other local BLAST tools, this tool can provide not only BLAST result table but also **BLAST resulting hit sequences** for further analysis, such as phylogenetic tree construction. 
+## Dependencies
+
+### Operating system and command line utilities
+* GNU/Linux environment with Bash shell
+* `rsync` for high-volume downloads
+* Coreutils providing `md5sum`
+* Optional: `ncbi-blast+` for downstream BLAST usage in the notebook
+
+### Python
+* Python 3.9 or newer
+* Packages: `biopython`, `pandas`, `numpy`
+
+Install the Python packages with:
+```bash
+python -m pip install biopython pandas numpy
+```
+
+## Download FTP address
+
+The genome data should be downloaded from the NCBI FTP site according to the FTP address. To get the FTP address, a custom assembly ID table should be provided as shown in the following steps:
+1. go to the NCBI Assembly website
+2. search the assemblies for the costumed genome database
+3. download the ID table 
+
+Here is an example to get assembly ID table for *Listeria monocytogenes*. 
+![Screenshot_NCBI.png](attachment:Screenshot_NCBI.png)
+By clicking *Send to -> File -> Format -> ID Table -> Create File, a file assembly_result_table.txt can be downloaded.
+
+The downloaded table contains assembly accessions (GCA/GCF identifiers). Save a plain-text list with one accession per line—this file will be referenced by the CLI in the following steps.
+
+### Command line workflow overview
+
+All commands are executed from the project root with:
+```bash
+python blast_at_local_computer.py <subcommand> [options]
+```
+Use `--help` on any subcommand to inspect available flags.
+
+1. **Fetch assembly metadata and FTP links**
+   ```bash
+   python blast_at_local_computer.py metadata-download --gca-list assembly_ids.txt --download-path Data/ --workers 4 --email your@email
+   ```
+   * `metadata-download` contacts NCBI Entrez, saves JSON metadata, and writes FTP links into `Data/ftp/`.
+   * Provide your contact email via `--email` or set the `NCBI_EMAIL` environment variable.
+   * If any assemblies fail, retry with `metadata-retry --error-file link_download_error.txt`.
+
+2. **Convert FTP links to rsync addresses**
+   ```bash
+   python blast_at_local_computer.py make-rsync --ftp-path Data/ftp/ --rsync-path Data/rsync/ --processes 4
+   ```
+   This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/`.
+
+3. **Download genomes through rsync**
+   ```bash
+   python blast_at_local_computer.py genome-download --rsync-path Data/rsync/ --genome-path Data/download_genome/ --workers 32
+   ```
+   * Downloads each genome archive via rsync using the adaptive task scheduler.
+   * If the command is interrupted, use `genome-retry` to resume unfinished genomes based on existing files.
+
+4. **Prepare MD5 checksum address list**
+   ```bash
+   python blast_at_local_computer.py md5-address --ftp-path Data/ftp/ --md5-address-path Data/md5_address/ --processes 4
+   ```
+   Each FTP entry is converted into the location of its companion `md5checksums.txt` file.
+
+5. **Download MD5 checksum files**
+   ```bash
+   python blast_at_local_computer.py md5-download --md5-address-path Data/md5_address/ --md5-download-path Data/download_md5/ --workers 32
+   ```
+   * Retrieves checksum manifests for every genome batch.
+   * Re-run failed transfers with `md5-retry`.
+
+6. **Validate downloads using MD5**
+   ```bash
+   python blast_at_local_computer.py md5-check --generated-path Data/generated_md5/ --download-path Data/download_md5/ --processes 4 --show-not-match
+   ```
+   Generated MD5 values can be compared against the downloaded manifests. Use the notebook utilities to create local MD5 lists before running this command. The optional `--show-not-match` flag prints genomes that need re-downloads.
+
+7. **Decompress genome archives**
+   ```bash
+   python blast_at_local_computer.py gunzip --genome-path Data/download_genome/
+   ```
+   This helper extracts `*.fna.gz` files in place once you are confident in the checksum validation.
+
+## Notes on blast and downstream analysis
+
+The CLI is intentionally limited to acquisition, verification, and preparation steps. Tasks such as database construction, BLAST execution, and hit extraction remain available through the original **Blast_at_local_computer.ipynb** notebook or your preferred tooling. This separation keeps the command line interface focused on the high-volume download workflow.
 
 ## Citation
-If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper: 
+If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper:
 > Ma, X., Chen, J., Zwietering, M. H., Abee, T., & Den Besten, H. M. W. (2024). Stress resistant *rpsU* variants of *Listeria monocytogenes* can become underrepresented due to enrichment bias. International Journal of Food Microbiology, 416, 110680. https://doi.org/10.1016/j.ijfoodmicro.2024.110680
-
