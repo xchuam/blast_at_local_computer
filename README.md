@@ -37,7 +37,7 @@ The genome data should be downloaded from the NCBI FTP site according to the FTP
 
 Here is an example to get assembly ID table for *Listeria monocytogenes*. 
 ![Screenshot_NCBI.png](Screenshot_NCBI.PNG)
-By clicking *Send to -> File -> Format -> ID Table -> Create File, a file assembly_result_table.txt can be downloaded.
+By *Download -> Download Talbe -> Create File, a `TSV` file can be downloaded.
 
 The downloaded table contains assembly accessions (GCA/GCF identifiers). Save a plain-text list with one accession per line—this file will be referenced by the CLI in the following steps.
 
