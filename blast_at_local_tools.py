@@ -12,6 +12,8 @@ from multiprocessing import Lock, Process, Manager #for computation intensive wo
 import subprocess
 import shutil
 
+from tasker import RsyncTasker
+
 def get_assembly_summary(id):
     """Get esummary for an entrez id"""
     esummary_handle = Entrez.esummary(db="assembly", id=id, report="full")
@@ -225,13 +227,9 @@ def genome_download(genome_path = "Data/download_genome/", rsync_path = "Data/rs
     print(time.asctime())
     
     if __name__ == 'blast_at_local_tools':
-        exe=concurrent.futures.ThreadPoolExecutor(max_workers=worker)         #45 threads
-
-
-        for address in ls_mission:
-            exe.submit(rsync_one, address, genome_path)
-
-        exe.shutdown(wait=True)
+        tasker = RsyncTasker(genome_path)
+        tasks = [((address,), 1) for address in ls_mission]
+        tasker.excute(tasks, max_workers=worker)
     
     end_time_external = time.time()
     print("final time usage " + str(end_time_external - start_time_external))
@@ -273,14 +271,9 @@ def genome_re_download(genome_path = "Data/download_genome/", rsync_path = "Data
 
     #use multithreads to download genome data that are not successful previously
     if __name__ == 'blast_at_local_tools':
-        exe=concurrent.futures.ThreadPoolExecutor(max_workers=worker)         #45 threads
-
-
-        for name in ls_not_download:
-            address = dict_name_address[name]
-            exe.submit(rsync_one, address, genome_path)
-
-        exe.shutdown(wait=True)
+        tasker = RsyncTasker(genome_path)
+        tasks = [((dict_name_address[name],), 1) for name in ls_not_download]
+        tasker.excute(tasks, max_workers=worker)
     
     end_time_external = time.time()
     print("final time usage " + str(end_time_external - start_time_external))
@@ -386,13 +379,14 @@ def md5_download(md5_download_path = "Data/download_md5/", md5_address_path = "D
 
     #use multithreads to download md5 address
     if __name__ == 'blast_at_local_tools':
-        exe=concurrent.futures.ThreadPoolExecutor(max_workers=worker)         #45 threads
-
+        tasker = RsyncTasker(md5_download_path)
+        tasks = []
 
         for address in ls_mission_md5:
-            exe.submit(rsync_one_md5, address, md5_download_path)
+            name = address.split("/")[-2] + "_md5.txt"
+            tasks.append(((address, os.path.join(md5_download_path, name)), 1))
 
-        exe.shutdown(wait=True)
+        tasker.excute(tasks, max_workers=worker)
 
     end_time_external = time.time()
     print("final time usage " + str(end_time_external - start_time_external))
@@ -431,14 +425,15 @@ def md5_re_download(md5_download_path = "Data/download_md5/", md5_address_path =
 
     #use multithreads to download md5 files that are not successful previously
     if __name__ == 'blast_at_local_tools':
-        exe=concurrent.futures.ThreadPoolExecutor(max_workers=worker)         #45 threads
-
+        tasker = RsyncTasker(md5_download_path)
+        tasks = []
 
         for name in ls_not_download_md5:
             address = dict_name_address[name]
-            exe.submit(rsync_one_md5, address, md5_download_path)
+            dest = os.path.join(md5_download_path, name + "_md5.txt")
+            tasks.append(((address, dest), 1))
 
-        exe.shutdown(wait=True)
+        tasker.excute(tasks, max_workers=worker)
 
     end_time_external = time.time()
     print("final time usage " + str(end_time_external - start_time_external))
