@@ -28,6 +28,29 @@ Install the Python packages with:
 python -m pip install biopython pandas numpy
 ```
 
+## Code organization
+
+All Python sources now live inside the top-level ``src/`` directory. This keeps
+the repository root tidy and makes future reorganizations easier. Add the
+directory to your ``PYTHONPATH`` (for example with
+``export PYTHONPATH=src:$PYTHONPATH``) when running code outside of the provided
+CLI entry point.
+
+Within ``src/`` the helper routines that power the CLI live in the
+``blast_at_local_tools`` package. The previous monolithic
+``blast_at_local_tools.py`` module has been split into focused submodules:
+
+* ``metadata.py`` – Entrez lookups and FTP manifest generation
+* ``transfers.py`` – rsync address conversion, genome downloads, and gunzip
+* ``md5_ops.py`` – MD5 manifest conversion, download, and validation helpers
+* ``blast_db.py`` – local BLAST database construction and archival utilities
+* ``blast_pipeline.py`` – parallel BLAST execution helpers
+* ``results.py`` – sequence and tabular extraction from BLAST output
+
+Once ``src/`` is on your import path, ``import blast_at_local_tools`` exposes the
+same public functions as before, so existing notebooks and scripts can continue
+to work without further changes.
+
 ## Download FTP address
 
 The genome data should be downloaded from the NCBI FTP site according to the FTP address. To get the FTP address, a custom assembly ID table should be provided as shown in the following steps:
@@ -45,13 +68,13 @@ The downloaded table contains assembly accessions (GCA/GCF identifiers). Save a 
 
 All commands are executed from the project root with:
 ```bash
-python blast_at_local_computer.py <subcommand> [options]
+python src/blast_at_local_computer.py <subcommand> [options]
 ```
 Use `--help` on any subcommand to inspect available flags.
 
 1. **Fetch assembly metadata and FTP links**
    ```bash
-   python blast_at_local_computer.py metadata-download --gca-list assembly_ids.txt --download-path Data/ --workers 4 --email your@email
+   python src/blast_at_local_computer.py metadata-download --gca-list assembly_ids.txt --download-path Data/ --workers 4 --email your@email
    ```
    * `metadata-download` contacts NCBI Entrez, saves JSON metadata, and writes FTP links into `Data/ftp/`.
    * Provide your contact email via `--email` or set the `NCBI_EMAIL` environment variable.
@@ -59,39 +82,39 @@ Use `--help` on any subcommand to inspect available flags.
 
 2. **Convert FTP links to rsync addresses**
    ```bash
-   python blast_at_local_computer.py make-rsync --ftp-path Data/ftp/ --rsync-path Data/rsync/ --processes 4
+   python src/blast_at_local_computer.py make-rsync --ftp-path Data/ftp/ --rsync-path Data/rsync/ --processes 4
    ```
    This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/`.
 
 3. **Download genomes through rsync**
    ```bash
-   python blast_at_local_computer.py genome-download --rsync-path Data/rsync/ --genome-path Data/download_genome/ --workers 32
+   python src/blast_at_local_computer.py genome-download --rsync-path Data/rsync/ --genome-path Data/download_genome/ --workers 32
    ```
    * Downloads each genome archive via rsync using the adaptive task scheduler.
    * If the command is interrupted, use `genome-retry` to resume unfinished genomes based on existing files.
 
 4. **Prepare MD5 checksum address list**
    ```bash
-   python blast_at_local_computer.py md5-address --ftp-path Data/ftp/ --md5-address-path Data/md5_address/ --processes 4
+   python src/blast_at_local_computer.py md5-address --ftp-path Data/ftp/ --md5-address-path Data/md5_address/ --processes 4
    ```
    Each FTP entry is converted into the location of its companion `md5checksums.txt` file.
 
 5. **Download MD5 checksum files**
    ```bash
-   python blast_at_local_computer.py md5-download --md5-address-path Data/md5_address/ --md5-download-path Data/download_md5/ --workers 32
+   python src/blast_at_local_computer.py md5-download --md5-address-path Data/md5_address/ --md5-download-path Data/download_md5/ --workers 32
    ```
    * Retrieves checksum manifests for every genome batch.
    * Re-run failed transfers with `md5-retry`.
 
 6. **Validate downloads using MD5**
    ```bash
-   python blast_at_local_computer.py md5-check --generated-path Data/generated_md5/ --download-path Data/download_md5/ --processes 4 --show-not-match
+   python src/blast_at_local_computer.py md5-check --generated-path Data/generated_md5/ --download-path Data/download_md5/ --processes 4 --show-not-match
    ```
    Generated MD5 values can be compared against the downloaded manifests. Use the notebook utilities to create local MD5 lists before running this command. The optional `--show-not-match` flag prints genomes that need re-downloads.
 
 7. **Decompress genome archives**
    ```bash
-   python blast_at_local_computer.py gunzip --genome-path Data/download_genome/
+   python src/blast_at_local_computer.py gunzip --genome-path Data/download_genome/
    ```
    This helper extracts `*.fna.gz` files in place once you are confident in the checksum validation.
 
