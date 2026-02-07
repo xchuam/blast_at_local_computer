@@ -7,7 +7,13 @@ focused submodules but the import surface remains unchanged so existing scripts
 can continue to ``import blast_at_local_tools``.
 """
 
-from .metadata import get_assembly_summary, get_assemblies, ftp_download, ftp_re_download
+from .metadata import (
+    ftp_download,
+    ftp_re_download,
+    get_assemblies,
+    get_assembly_summary,
+    metadata_enrich,
+)
 from .transfers import (
     ftp_modify,
     ftp_to_rsync,
@@ -60,6 +66,7 @@ __all__ = [
     "make_db_by_ls",
     "make_a_db",
     "make_database",
+    "metadata_enrich",
     "md5_address",
     "md5_check",
     "md5_download",
