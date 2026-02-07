@@ -127,3 +127,30 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# macOS / Windows noise
+.DS_Store
+Thumbs.db
+
+# Editor settings
+.idea/
+.vscode/
+
+# Project runtime outputs (CLI-generated)
+link_download_error.txt
+md5_download_error.txt
+md5_generated_error.txt
+md5_not_match.txt
+metadata_enrich_error.txt
+metadata_enriched.tsv
+test_*.log
+
+# Default generated data folders from CLI workflow
+Data/ftp/
+Data/jsons/
+Data/rsync/
+Data/download_genome/
+Data/download_md5/
+Data/generated_md5/
+Data/generate_md5/
+Data/md5_address/

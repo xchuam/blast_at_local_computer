@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import Manager, Process
+from pathlib import Path
 from typing import Iterable, List, Sequence
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
-
-from tasker import RsyncTasker
-
 
 def md5_address(
     readins: Iterable[str],
@@ -72,28 +74,85 @@ def _load_md5_addresses(md5_address_path: str) -> List[str]:
     return addresses
 
 
+def _to_https_url(address: str) -> str:
+    clean = address.strip().replace("\\", "/")
+    if clean.startswith("https://"):
+        return clean
+    if clean.startswith("http://"):
+        return "https://" + clean[len("http://") :]
+    if clean.startswith("rsync://"):
+        return "https://" + clean[len("rsync://") :]
+    if clean.startswith("ftp://"):
+        return "https://" + clean[len("ftp://") :]
+    if clean.startswith("ftp.ncbi.nlm.nih.gov/"):
+        return f"https://{clean}"
+    return clean
+
+
+def _md5_name(address: str) -> str:
+    parsed = urlparse(_to_https_url(address))
+    name = Path(parsed.path).parent.name
+    if not name:
+        raise ValueError(f"Cannot determine md5 filename stem from address: {address}")
+    return name
+
+
+def _download_one(url: str, output_path: str) -> tuple[bool, str]:
+    req = Request(url, headers={"User-Agent": "blast-at-local-computer/CLI-0.1"})
+    try:
+        with urlopen(req, timeout=300) as response, open(output_path, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        return True, ""
+    except Exception as exc:  # pragma: no cover - network and remote IO dependent
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def md5_download(
     md5_download_path: str = "Data/download_md5/",
     md5_address_path: str = "Data/md5_address/",
-    worker: int = 45,
+    worker: int = 2,
 ) -> None:
-    """Download MD5 checksum files listed in the manifests."""
+    """Download MD5 checksum files, converting rsync/ftp links to HTTPS automatically."""
 
     os.makedirs(md5_download_path, exist_ok=True)
-    with open("md5_download_error.txt", "w", encoding="utf-8") as handle:
-        handle.write("")
-
     addresses = _load_md5_addresses(md5_address_path)
+    if not addresses:
+        print(f"No MD5 address records found in {md5_address_path}")
+        return
 
     start_time = time.time()
     print(time.asctime())
 
-    tasker = RsyncTasker(md5_download_path)
-    tasks = []
-    for address in addresses:
-        name = address.split("/")[-2] + "_md5.txt"
-        tasks.append(((address, os.path.join(md5_download_path, name)), 1))
-    tasker.excute(tasks, max_workers=worker)
+    failures: List[tuple[str, str, str]] = []
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
+        futures = {}
+        for address in addresses:
+            url = _to_https_url(address)
+            name = _md5_name(address)
+            output = os.path.join(md5_download_path, f"{name}_md5.txt")
+            future = executor.submit(_download_one, url, output)
+            futures[future] = (address, url)
+
+        for future in as_completed(futures):
+            address, url = futures[future]
+            ok, error = future.result()
+            if ok:
+                succeeded += 1
+            else:
+                failures.append((address, url, error))
+
+    with open("md5_download_error.txt", "w", encoding="utf-8") as handle:
+        for address, url, error in failures:
+            handle.write(f"{address}\t{url}\t{error}\n")
+
+    print(f"Total MD5 files: {len(addresses)}")
+    print(f"Downloaded successfully: {succeeded}")
+    print(f"Download failures: {len(failures)}")
+    if failures:
+        print("Failure details were written to md5_download_error.txt")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
@@ -103,28 +162,51 @@ def md5_download(
 def md5_re_download(
     md5_download_path: str = "Data/download_md5/",
     md5_address_path: str = "Data/md5_address/",
-    worker: int = 45,
+    worker: int = 2,
 ) -> None:
-    """Retry MD5 downloads that are missing from ``md5_download_path``."""
+    """Retry missing MD5 files, converting rsync/ftp links to HTTPS automatically."""
 
     os.makedirs(md5_download_path, exist_ok=True)
     downloaded = {name.replace("_md5.txt", "") for name in os.listdir(md5_download_path)}
 
     addresses = _load_md5_addresses(md5_address_path)
-    address_map = {addr.split("/")[-2]: addr for addr in addresses}
+    address_map = {_md5_name(addr): addr for addr in addresses}
     pending = set(address_map).difference(downloaded)
     print(f"{len(pending)} md5 files still need to be downloaded.")
+    if not pending:
+        return
 
     start_time = time.time()
     print(time.asctime())
 
-    tasker = RsyncTasker(md5_download_path)
-    tasks = []
-    for name in pending:
-        address = address_map[name]
-        dest = os.path.join(md5_download_path, f"{name}_md5.txt")
-        tasks.append(((address, dest), 1))
-    tasker.excute(tasks, max_workers=worker)
+    failures: List[tuple[str, str, str]] = []
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
+        futures = {}
+        for name in sorted(pending):
+            address = address_map[name]
+            url = _to_https_url(address)
+            output = os.path.join(md5_download_path, f"{name}_md5.txt")
+            future = executor.submit(_download_one, url, output)
+            futures[future] = (address, url)
+
+        for future in as_completed(futures):
+            address, url = futures[future]
+            ok, error = future.result()
+            if ok:
+                succeeded += 1
+            else:
+                failures.append((address, url, error))
+
+    with open("md5_download_error.txt", "w", encoding="utf-8") as handle:
+        for address, url, error in failures:
+            handle.write(f"{address}\t{url}\t{error}\n")
+
+    print(f"Retried MD5 files: {len(pending)}")
+    print(f"Downloaded successfully: {succeeded}")
+    print(f"Download failures: {len(failures)}")
+    if failures:
+        print("Failure details were written to md5_download_error.txt")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
@@ -210,7 +292,7 @@ def md5_check(
     md5_generate_path: str = "Data/generate_md5/",
     md5_download_path: str = "Data/download_md5/",
     process_num: int = 1,
-    show_not_match: bool = False,
+    not_match_output: str = "md5_not_match.txt",
 ) -> None:
     """Compare generated MD5 checksums with the downloaded checksum files."""
 
@@ -236,8 +318,12 @@ def md5_check(
         for job in jobs:
             job.join()
 
-        mismatches = list(shared)
+        mismatches = sorted(set(shared))
 
     print(f"{len(mismatches)} MD5 values cannot match.")
-    if show_not_match:
-        print(mismatches)
+    output_path = Path(not_match_output).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        if mismatches:
+            handle.write("\n".join(mismatches) + "\n")
+    print(f"Mismatch IDs written to: {output_path}")

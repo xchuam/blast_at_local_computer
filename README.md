@@ -1,4 +1,4 @@
-# BLAST at local computer (V: cli_ed.0.1)
+# BLAST at local computer (V: CLI-0.1)
 **Current Version provides commandline compatible rsync download for large amount of genome from NCBI genome Datasets**
 
 Here we provide a tool **Blast_at_local_computer.ipynb** for the following works:
@@ -74,49 +74,88 @@ Use `--help` on any subcommand to inspect available flags.
 
 1. **Fetch assembly metadata and FTP links**
    ```bash
-   python src/blast_at_local_computer.py metadata-download --gca-list assembly_ids.txt --download-path Data/ --workers 4 --email your@email
+   python src/blast_at_local_computer.py metadata-download \
+    --gca-list assembly_ids.txt \
+    --download-path Data/ \
+    --workers 2 \
+    --email your@email
    ```
    * `metadata-download` contacts NCBI Entrez, saves JSON metadata, and writes FTP links into `Data/ftp/`.
    * Provide your contact email via `--email` or set the `NCBI_EMAIL` environment variable.
    * If any assemblies fail, retry with `metadata-retry --error-file link_download_error.txt`.
 
-2. **Convert FTP links to rsync addresses**
+2. **Enrich metadata with BioSample attributes (country/location, host, isolate, source, year)**
    ```bash
-   python src/blast_at_local_computer.py make-rsync --ftp-path Data/ftp/ --rsync-path Data/rsync/ --processes 4
+   python src/blast_at_local_computer.py metadata-enrich \
+   --json-path Data/jsons/ \
+   --output-tsv Data/metadata_enriched.tsv \
+   --workers 2 \
+   --email your@email \
+   --error-file Data/metadata_enrich_error.txt
+   ```
+   * This reads JSON files created by `metadata-download`, fetches BioSample XML, and writes an enriched TSV.
+   * Key output fields include `country_location`, `isolate`, `host`, `isolation_source`, and `year`.
+   * Use `--error-file` to store record-level enrichment failures without interrupting the full run.
+
+3. **Convert FTP links to rsync addresses**
+   ```bash
+   python src/blast_at_local_computer.py make-rsync \
+   --ftp-path Data/ftp/ \
+   --rsync-path Data/rsync/ \
+   --processes 4
    ```
    This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/`.
 
-3. **Download genomes through rsync**
+4. **Download genomes through rsync**
    ```bash
-   python src/blast_at_local_computer.py genome-download --rsync-path Data/rsync/ --genome-path Data/download_genome/ --workers 32
+   python src/blast_at_local_computer.py genome-download \
+   --rsync-path Data/rsync/ \
+   --genome-path Data/download_genome/ \
+   --workers 2
    ```
    * Downloads each genome archive via rsync using the adaptive task scheduler.
+   * Default worker count is `2`.
+   * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
    * If the command is interrupted, use `genome-retry` to resume unfinished genomes based on existing files.
 
-4. **Prepare MD5 checksum address list**
+5. **Prepare MD5 checksum address list**
    ```bash
-   python src/blast_at_local_computer.py md5-address --ftp-path Data/ftp/ --md5-address-path Data/md5_address/ --processes 4
+   python src/blast_at_local_computer.py md5-address \
+   --ftp-path Data/ftp/ \
+   --md5-address-path Data/md5_address/ \
+   --processes 4
    ```
    Each FTP entry is converted into the location of its companion `md5checksums.txt` file.
 
-5. **Download MD5 checksum files**
+6. **Download MD5 checksum files**
    ```bash
-   python src/blast_at_local_computer.py md5-download --md5-address-path Data/md5_address/ --md5-download-path Data/download_md5/ --workers 32
+   python src/blast_at_local_computer.py md5-download \
+   --md5-address-path Data/md5_address/ \
+   --md5-download-path Data/download_md5/ \
+   --workers 2
    ```
    * Retrieves checksum manifests for every genome batch.
+   * Default worker count is `2`.
+   * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
    * Re-run failed transfers with `md5-retry`.
 
-6. **Validate downloads using MD5**
+7. **Validate downloads using MD5**
    ```bash
-   python src/blast_at_local_computer.py md5-check --generated-path Data/generated_md5/ --download-path Data/download_md5/ --processes 4 --show-not-match
+   python src/blast_at_local_computer.py md5-check \
+   --generated-path Data/generated_md5/ \
+   --download-path Data/download_md5/ \
+   --processes 4 \
+   --not-match-output Data/md5_not_match.txt
    ```
-   Generated MD5 values can be compared against the downloaded manifests. Use the notebook utilities to create local MD5 lists before running this command. The optional `--show-not-match` flag prints genomes that need re-downloads.
+   Generated MD5 values can be compared against the downloaded manifests. Use the notebook utilities to create local MD5 lists before running this command. Mismatch IDs are always written to file; if `--not-match-output` is omitted, the default output is `$PWD/md5_not_match.txt`.
 
-7. **Decompress genome archives**
+8. **Decompress genome archives**
    ```bash
-   python src/blast_at_local_computer.py gunzip --genome-path Data/download_genome/
+   python src/blast_at_local_computer.py gunzip \
+   --genome-path Data/download_genome/ \
+   --workers 4
    ```
-   This helper extracts `*.fna.gz` files in place once you are confident in the checksum validation.
+   This helper extracts all `*.gz` files in parallel once you are confident in the checksum validation. Warning: if `--workers > 15`, the CLI warns that HDD throughput may not handle so many simultaneous decompressions.
 
 ## Notes on blast and downstream analysis
 

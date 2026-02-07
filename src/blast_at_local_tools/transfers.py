@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import Process
+from pathlib import Path
 from typing import Iterable, List
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import numpy as np
-
-from tasker import RsyncTasker
-
 
 def ftp_modify(
     readins: Iterable[str],
@@ -75,22 +77,81 @@ def _load_rsync_addresses(rsync_path: str) -> List[str]:
     return addresses
 
 
+def _to_https_url(address: str) -> str:
+    clean = address.strip().replace("\\", "/")
+    if clean.startswith("https://"):
+        return clean
+    if clean.startswith("http://"):
+        return "https://" + clean[len("http://") :]
+    if clean.startswith("rsync://"):
+        return "https://" + clean[len("rsync://") :]
+    if clean.startswith("ftp://"):
+        return "https://" + clean[len("ftp://") :]
+    if clean.startswith("ftp.ncbi.nlm.nih.gov/"):
+        return f"https://{clean}"
+    return clean
+
+
+def _address_filename(address: str) -> str:
+    parsed = urlparse(_to_https_url(address))
+    filename = os.path.basename(parsed.path.rstrip("/"))
+    if not filename:
+        raise ValueError(f"Cannot determine filename from address: {address}")
+    return filename
+
+
+def _download_one(url: str, output_path: str) -> tuple[bool, str]:
+    req = Request(url, headers={"User-Agent": "blast-at-local-computer/CLI-0.1"})
+    try:
+        with urlopen(req, timeout=300) as response, open(output_path, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        return True, ""
+    except Exception as exc:  # pragma: no cover - network and remote IO dependent
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def genome_download(
     genome_path: str = "Data/download_genome/",
     rsync_path: str = "Data/rsync/",
-    worker: int = 45,
+    worker: int = 2,
 ) -> None:
-    """Download genome FASTA files referenced by the rsync manifests."""
+    """Download genome FASTA files, converting rsync/ftp links to HTTPS automatically."""
 
     os.makedirs(genome_path, exist_ok=True)
     addresses = _load_rsync_addresses(rsync_path)
+    if not addresses:
+        print(f"No address records found in {rsync_path}")
+        return
 
     start_time = time.time()
     print(time.asctime())
 
-    tasker = RsyncTasker(genome_path)
-    tasks = [((address,), 1) for address in addresses]
-    tasker.excute(tasks, max_workers=worker)
+    failures: List[tuple[str, str]] = []
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
+        futures = {}
+        for address in addresses:
+            url = _to_https_url(address)
+            output = os.path.join(genome_path, _address_filename(address))
+            future = executor.submit(_download_one, url, output)
+            futures[future] = (address, url)
+
+        for future in as_completed(futures):
+            address, url = futures[future]
+            ok, error = future.result()
+            if ok:
+                succeeded += 1
+            else:
+                failures.append((address, f"{url} :: {error}"))
+
+    print(f"Total genome files: {len(addresses)}")
+    print(f"Downloaded successfully: {succeeded}")
+    print(f"Download failures: {len(failures)}")
+    if failures:
+        for address, error in failures:
+            print(f"[genome-download-failed] {address} -> {error}")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
@@ -100,32 +161,95 @@ def genome_download(
 def genome_re_download(
     genome_path: str = "Data/download_genome/",
     rsync_path: str = "Data/rsync/",
-    worker: int = 45,
+    worker: int = 2,
 ) -> None:
-    """Retry genome downloads that are missing from ``genome_path``."""
+    """Retry missing genome files, converting rsync/ftp links to HTTPS automatically."""
 
     os.makedirs(genome_path, exist_ok=True)
     addresses = _load_rsync_addresses(rsync_path)
     existing = {name for name in os.listdir(genome_path)}
 
-    address_map = {addr.split("/")[-1]: addr for addr in addresses}
+    address_map = {_address_filename(addr): addr for addr in addresses}
     pending = set(address_map).difference(existing)
     print(f"{len(pending)} genome data still need to be downloaded.")
+    if not pending:
+        return
 
     start_time = time.time()
     print(time.asctime())
 
-    tasker = RsyncTasker(genome_path)
-    tasks = [((address_map[name],), 1) for name in pending]
-    tasker.excute(tasks, max_workers=worker)
+    failures: List[tuple[str, str]] = []
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
+        futures = {}
+        for name in sorted(pending):
+            address = address_map[name]
+            url = _to_https_url(address)
+            output = os.path.join(genome_path, name)
+            future = executor.submit(_download_one, url, output)
+            futures[future] = (address, url)
+
+        for future in as_completed(futures):
+            address, url = futures[future]
+            ok, error = future.result()
+            if ok:
+                succeeded += 1
+            else:
+                failures.append((address, f"{url} :: {error}"))
+
+    print(f"Retried files: {len(pending)}")
+    print(f"Downloaded successfully: {succeeded}")
+    print(f"Download failures: {len(failures)}")
+    if failures:
+        for address, error in failures:
+            print(f"[genome-retry-failed] {address} -> {error}")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
     print(time.asctime())
 
 
-def g_unzip(genome_path: str = "Data/download_genome/") -> None:
-    """Gunzip all ``*.gz`` archives in ``genome_path``."""
+def _gunzip_one(gz_file: Path) -> tuple[str, bool, str]:
+    result = subprocess.run(
+        ["gunzip", str(gz_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return str(gz_file), True, ""
+    return str(gz_file), False, result.stderr.strip()
 
-    gunzip_command = f"gunzip {os.path.join(genome_path, '*.gz')}"
-    subprocess.run(gunzip_command, shell=True, check=False)
+
+def g_unzip(genome_path: str = "Data/download_genome/", worker: int = 4) -> None:
+    """Gunzip all ``*.gz`` archives in ``genome_path`` using parallel workers."""
+
+    gz_files = sorted(Path(genome_path).glob("*.gz"))
+    if not gz_files:
+        print(f"No .gz archives found in {genome_path}")
+        return
+
+    start_time = time.time()
+    print(time.asctime())
+
+    failures: List[tuple[str, str]] = []
+    succeeded = 0
+    with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
+        futures = [executor.submit(_gunzip_one, gz_file) for gz_file in gz_files]
+        for future in as_completed(futures):
+            file_path, ok, error = future.result()
+            if ok:
+                succeeded += 1
+            else:
+                failures.append((file_path, error))
+
+    print(f"Total archives: {len(gz_files)}")
+    print(f"Successfully decompressed: {succeeded}")
+    print(f"Failed decompressions: {len(failures)}")
+    if failures:
+        for file_path, error in failures:
+            print(f"[gunzip-failed] {file_path}: {error}")
+
+    end_time = time.time()
+    print(f"final time usage {end_time - start_time}")
+    print(time.asctime())
