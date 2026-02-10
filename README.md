@@ -75,14 +75,18 @@ Use `--help` on any subcommand to inspect available flags.
 1. **Fetch assembly metadata and FTP links**
    ```bash
    python src/blast_at_local_computer.py metadata-download \
-    --gca-list assembly_ids.txt \
+    --assembly-table assembly_result.tsv \
     --download-path Data/ \
     --workers 2 \
     --email your@email
    ```
-   * `metadata-download` contacts NCBI Entrez, saves JSON metadata, and writes FTP links into `Data/ftp/`.
+   * `metadata-download` accepts three accession sources: `--assembly-table`, `--gca-list`, and `--gca`.
+   * Accessions (`GCA_*` / `GCF_*`) are deduplicated while preserving order.
+   * Resolved accessions are written to `Data/temp/resolved_accessions.txt`.
+   * Metadata JSON and FTP links are written into `Data/jsons/` and `Data/ftp/`.
    * Provide your contact email via `--email` or set the `NCBI_EMAIL` environment variable.
-   * If any assemblies fail, retry with `metadata-retry --error-file link_download_error.txt`.
+   * Errors are logged to `Data/logs/link_download_error.txt`.
+   * If any assemblies fail, retry with `metadata-retry --download-path Data/`.
 
 2. **Enrich metadata with BioSample attributes (country/location, host, isolate, source, year)**
    ```bash
@@ -102,21 +106,30 @@ Use `--help` on any subcommand to inspect available flags.
    python src/blast_at_local_computer.py make-rsync \
    --ftp-path Data/ftp/ \
    --rsync-path Data/rsync/ \
+   --file-types genome,gff,gtf,protein \
    --processes 4
    ```
-   This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/`.
+   This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/` for the selected file types.
 
-4. **Download genomes through rsync**
+4. **Download selected NCBI assets**
    ```bash
    python src/blast_at_local_computer.py genome-download \
    --rsync-path Data/rsync/ \
-   --genome-path Data/download_genome/ \
+   --genome-path Data/download/ \
+   --file-types genome,gff,gtf,protein \
    --workers 2
    ```
-   * Downloads each genome archive via rsync using the adaptive task scheduler.
+   * Downloads selected archives via HTTPS converted from rsync/ftp links.
+   * Output is grouped into type subfolders:
+     * `Data/download/genome/`
+     * `Data/download/gff/`
+     * `Data/download/gtf/`
+     * `Data/download/protein/`
    * Default worker count is `2`.
    * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
-   * If the command is interrupted, use `genome-retry` to resume unfinished genomes based on existing files.
+   * Missing selected assets on NCBI are non-fatal and logged to `Data/logs/missing_assets.tsv`.
+   * Non-missing transfer failures are logged to `Data/logs/download_failures.tsv`.
+   * If the command is interrupted, use `genome-retry` to resume unfinished files based on existing output files.
 
 5. **Prepare MD5 checksum address list**
    ```bash
@@ -138,6 +151,7 @@ Use `--help` on any subcommand to inspect available flags.
    * Default worker count is `2`.
    * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
    * Re-run failed transfers with `md5-retry`.
+   * MD5 download failures are logged to `Data/logs/md5_download_error.txt`.
 
 7. **Validate downloads using MD5**
    ```bash
@@ -147,7 +161,7 @@ Use `--help` on any subcommand to inspect available flags.
    --processes 4 \
    --not-match-output Data/md5_not_match.txt
    ```
-   Generated MD5 values can be compared against the downloaded manifests. Use the notebook utilities to create local MD5 lists before running this command. Mismatch IDs are always written to file; if `--not-match-output` is omitted, the default output is `$PWD/md5_not_match.txt`.
+   Generated MD5 values can be compared against the downloaded manifests. MD5 matching is performed by exact downloaded file name (supports genome, gff, gtf, and protein assets). Use the notebook utilities (or `md5_generate`) to create local MD5 lists before running this command. Mismatch IDs are always written to file; if `--not-match-output` is omitted, the default output is `Data/logs/md5_not_match.txt`.
 
 8. **Decompress genome archives**
    ```bash

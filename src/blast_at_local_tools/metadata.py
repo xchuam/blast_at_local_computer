@@ -39,6 +39,7 @@ def get_assemblies(
     download: bool = False,
     path: str = "Data/",
     email: str = "a@email.address",
+    error_log_path: str = "link_download_error.txt",
 ) -> None:
     """Download assembly metadata and optionally the genome FASTA for ``gca_id``."""
 
@@ -47,6 +48,8 @@ def get_assemblies(
         with Entrez.esearch(db="assembly", term=gca_id, retmax=1) as handle:
             record = Entrez.read(handle)
         ids = record["IdList"]
+        if not ids:
+            raise ValueError("No assembly entry found in Entrez")
 
         summary = get_assembly_summary(ids)
         json_dir, ftp_dir, genome_dir = _ensure_directories(path)
@@ -68,12 +71,16 @@ def get_assemblies(
             urllib.request.urlretrieve(fasta_url, dest)
     except Exception as ex:  # pragma: no cover - network failures are contextual
         error_report = f"{gca_id}<{type(ex)} {ex.args}\n"
-        with open("link_download_error.txt", "a", encoding="utf-8") as handle:
+        error_path = Path(error_log_path).expanduser()
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        with error_path.open("a", encoding="utf-8") as handle:
             handle.write(error_report)
 
 
 def _reset_error_file(path: str) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as handle:
         handle.write("")
 
 
@@ -82,17 +89,18 @@ def ftp_download(
     worker: int = 2,
     download_path: str = "Data/",
     email: str = "a@email.address",
+    error_log_path: str = "link_download_error.txt",
 ) -> None:
     """Download assembly metadata and FTP links for ``gca_list``."""
 
     os.makedirs(download_path, exist_ok=True)
-    _reset_error_file("link_download_error.txt")
+    _reset_error_file(error_log_path)
 
     start_time = time.time()
     print(time.asctime())
     with ThreadPoolExecutor(max_workers=worker) as executor:
         for gca in gca_list:
-            executor.submit(get_assemblies, gca, False, download_path, email)
+            executor.submit(get_assemblies, gca, False, download_path, email, error_log_path)
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
     print(time.asctime())
@@ -103,19 +111,31 @@ def ftp_re_download(
     worker: int = 2,
     download_path: str = "Data/",
     email: str = "a@email.address",
+    error_log_path: str = "link_download_error.txt",
 ) -> None:
     """Retry metadata downloads listed in ``error_file``."""
 
-    error_df = pd.read_csv(error_file, sep="<", names=["gca", "rest"], encoding="utf-8")
-    print(f"{len(error_df)} genome metadata still need to be downloaded.")
+    error_path = Path(error_file).expanduser()
+    if not error_path.exists():
+        print(f"Error file not found: {error_path}")
+        return
+    if error_path.stat().st_size == 0:
+        print("0 genome metadata still need to be downloaded.")
+        return
 
-    _reset_error_file("link_download_error.txt")
+    error_df = pd.read_csv(error_path, sep="<", names=["gca", "rest"], encoding="utf-8")
+    error_df = error_df[error_df["gca"].notna()]
+    print(f"{len(error_df)} genome metadata still need to be downloaded.")
+    if error_df.empty:
+        return
+
+    _reset_error_file(error_log_path)
 
     start_time = time.time()
     print(time.asctime())
     with ThreadPoolExecutor(max_workers=worker) as executor:
         for gca in error_df["gca"]:
-            executor.submit(get_assemblies, gca, False, download_path, email)
+            executor.submit(get_assemblies, str(gca).strip(), False, download_path, email, error_log_path)
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
     print(time.asctime())
