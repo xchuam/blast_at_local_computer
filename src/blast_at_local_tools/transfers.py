@@ -3,23 +3,91 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import Process
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Sequence
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import numpy as np
+
+ASSET_SUFFIX_BY_TYPE = {
+    "genome": "_genomic.fna.gz",
+    "gff": "_genomic.gff.gz",
+    "gtf": "_genomic.gtf.gz",
+    "protein": "_protein.faa.gz",
+}
+ASSET_TYPE_BY_SUFFIX = {suffix: asset for asset, suffix in ASSET_SUFFIX_BY_TYPE.items()}
+ACCESSION_PATTERN = re.compile(r"(GC[AF]_\d+\.\d+)")
+
+
+def _write_tsv(path: Path, header: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(header) + "\n")
+        for row in rows:
+            handle.write("\t".join(row) + "\n")
+
+
+def _to_rsync_url(address: str) -> str:
+    clean = address.strip().replace("\\", "/")
+    if clean.startswith("rsync://"):
+        return clean
+    if clean.startswith("ftp://"):
+        return "rsync://" + clean[len("ftp://") :]
+    if clean.startswith("ftp.ncbi.nlm.nih.gov/"):
+        return f"rsync://{clean}"
+    return clean
+
+
+def _expand_asset_addresses(address: str, file_types: Sequence[str]) -> List[str]:
+    clean = _to_rsync_url(address)
+    if not clean:
+        return []
+
+    parsed = urlparse(clean)
+    path = parsed.path.rstrip("/")
+    name = os.path.basename(path)
+    suffixes = tuple(ASSET_TYPE_BY_SUFFIX)
+
+    if name.endswith(suffixes):
+        base = clean[: -len(next(suffix for suffix in suffixes if name.endswith(suffix)))]
+    else:
+        root = clean.rstrip("/")
+        label = os.path.basename(urlparse(root).path.rstrip("/"))
+        base = f"{root}/{label}"
+
+    return [f"{base}{ASSET_SUFFIX_BY_TYPE[file_type]}" for file_type in file_types]
+
+
+def _address_type(address: str) -> str:
+    filename = _address_filename(address)
+    for suffix, file_type in ASSET_TYPE_BY_SUFFIX.items():
+        if filename.endswith(suffix):
+            return file_type
+    return "unknown"
+
+
+def _address_accession(address: str) -> str:
+    filename = _address_filename(address)
+    match = ACCESSION_PATTERN.search(filename)
+    if match:
+        return match.group(1)
+    return ""
+
 
 def ftp_modify(
     readins: Iterable[str],
     batch: int,
     ftp_path: str = "Data/ftp/",
     rsync_path: str = "Data/rsync/",
+    file_types: Sequence[str] = ("genome",),
 ) -> None:
     """Convert FTP URLs stored in ``ftp_path`` files to rsync addresses."""
 
@@ -29,19 +97,16 @@ def ftp_modify(
         for filename in readins:
             ftp_file = os.path.join(ftp_path, filename)
             with open(ftp_file, "r", encoding="utf-8") as source:
-                address = (
-                    source.read()
-                    .replace("ftp", "rsync", 1)
-                    .replace("\\", "/")
-                    .replace("_genomic.fna.gz", "_genomic.fna.gz\n")
-                )
-            destination.write(address)
+                address = source.read().strip()
+            for expanded in _expand_asset_addresses(address, file_types):
+                destination.write(f"{expanded}\n")
 
 
 def ftp_to_rsync(
     ftp_path: str = "Data/ftp/",
     rsync_path: str = "Data/rsync/",
     process_num: int = 1,
+    file_types: Sequence[str] = ("genome",),
 ) -> None:
     """Transform FTP manifests into rsync address files using ``process_num`` workers."""
 
@@ -55,7 +120,7 @@ def ftp_to_rsync(
     for index, chunk in enumerate(missions):
         p = Process(
             target=ftp_modify,
-            args=(list(chunk), index, ftp_path, rsync_path),
+            args=(list(chunk), index, ftp_path, rsync_path, list(file_types)),
         )
         p.start()
         jobs.append(p)
@@ -100,27 +165,70 @@ def _address_filename(address: str) -> str:
     return filename
 
 
-def _download_one(url: str, output_path: str) -> tuple[bool, str]:
+def _download_one(url: str, output_path: str | Path) -> tuple[bool, str, str]:
     req = Request(url, headers={"User-Agent": "blast-at-local-computer/CLI-0.1"})
     try:
-        with urlopen(req, timeout=300) as response, open(output_path, "wb") as handle:
+        with urlopen(req, timeout=60) as response, open(output_path, "wb") as handle:
             shutil.copyfileobj(response, handle)
-        return True, ""
+        return True, "", ""
+    except HTTPError as exc:  # pragma: no cover - network and remote IO dependent
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        if exc.code == 404:
+            return False, "missing", f"HTTPError 404: {exc.reason}"
+        return False, "error", f"HTTPError {exc.code}: {exc.reason}"
     except Exception as exc:  # pragma: no cover - network and remote IO dependent
         if os.path.exists(output_path):
             os.remove(output_path)
-        return False, f"{type(exc).__name__}: {exc}"
+        return False, "error", f"{type(exc).__name__}: {exc}"
+
+
+def _existing_relative_files(download_root: Path) -> set[str]:
+    existing: set[str] = set()
+    for file_path in download_root.rglob("*"):
+        if file_path.is_file():
+            existing.add(str(file_path.relative_to(download_root)))
+    return existing
+
+
+def _known_missing_relative_files(log_path: Path) -> set[str]:
+    known: set[str] = set()
+    if not log_path.exists():
+        return known
+    with log_path.open("r", encoding="utf-8") as handle:
+        for index, line in enumerate(handle):
+            if index == 0:
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 3:
+                continue
+            file_type = fields[1].strip()
+            filename = fields[2].strip()
+            if file_type and filename:
+                known.add(str(Path(file_type) / filename))
+    return known
 
 
 def genome_download(
     genome_path: str = "Data/download_genome/",
     rsync_path: str = "Data/rsync/",
     worker: int = 2,
+    file_types: Sequence[str] = ("genome",),
+    logs_path: str | None = None,
 ) -> None:
-    """Download genome FASTA files, converting rsync/ftp links to HTTPS automatically."""
+    """Download selected asset files, converting rsync/ftp links to HTTPS automatically."""
 
-    os.makedirs(genome_path, exist_ok=True)
-    addresses = _load_rsync_addresses(rsync_path)
+    download_root = Path(genome_path)
+    download_root.mkdir(parents=True, exist_ok=True)
+    logs_dir = Path(logs_path) if logs_path else download_root.parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    selected = {item.lower() for item in file_types}
+    addresses = [
+        address
+        for address in _load_rsync_addresses(rsync_path)
+        if _address_type(address) in selected
+    ]
     if not addresses:
         print(f"No address records found in {rsync_path}")
         return
@@ -128,30 +236,58 @@ def genome_download(
     start_time = time.time()
     print(time.asctime())
 
-    failures: List[tuple[str, str]] = []
+    failures: List[tuple[str, str, str]] = []
+    missing_assets: List[tuple[str, str, str, str, str]] = []
     succeeded = 0
     with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
         futures = {}
         for address in addresses:
             url = _to_https_url(address)
-            output = os.path.join(genome_path, _address_filename(address))
+            file_type = _address_type(address)
+            output_dir = download_root / file_type
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output = str(output_dir / _address_filename(address))
             future = executor.submit(_download_one, url, output)
             futures[future] = (address, url)
 
         for future in as_completed(futures):
             address, url = futures[future]
-            ok, error = future.result()
+            ok, status, error = future.result()
             if ok:
                 succeeded += 1
+            elif status == "missing":
+                missing_assets.append(
+                    (
+                        _address_accession(address),
+                        _address_type(address),
+                        _address_filename(address),
+                        url,
+                        error,
+                    )
+                )
             else:
-                failures.append((address, f"{url} :: {error}"))
+                failures.append((address, url, error))
 
-    print(f"Total genome files: {len(addresses)}")
+    _write_tsv(
+        logs_dir / "missing_assets.tsv",
+        ("accession", "file_type", "filename", "url", "reason"),
+        missing_assets,
+    )
+    _write_tsv(
+        logs_dir / "download_failures.tsv",
+        ("address", "url", "reason"),
+        failures,
+    )
+
+    print(f"Total selected files: {len(addresses)}")
     print(f"Downloaded successfully: {succeeded}")
+    print(f"Missing assets (warn only): {len(missing_assets)}")
     print(f"Download failures: {len(failures)}")
     if failures:
-        for address, error in failures:
-            print(f"[genome-download-failed] {address} -> {error}")
+        for address, url, error in failures:
+            print(f"[genome-download-failed] {address} -> {url} :: {error}")
+    print(f"Missing-asset log: {logs_dir / 'missing_assets.tsv'}")
+    print(f"Failure log: {logs_dir / 'download_failures.tsv'}")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
@@ -162,47 +298,91 @@ def genome_re_download(
     genome_path: str = "Data/download_genome/",
     rsync_path: str = "Data/rsync/",
     worker: int = 2,
+    file_types: Sequence[str] = ("genome",),
+    logs_path: str | None = None,
 ) -> None:
-    """Retry missing genome files, converting rsync/ftp links to HTTPS automatically."""
+    """Retry missing selected asset files, converting rsync/ftp links to HTTPS automatically."""
 
-    os.makedirs(genome_path, exist_ok=True)
-    addresses = _load_rsync_addresses(rsync_path)
-    existing = {name for name in os.listdir(genome_path)}
+    download_root = Path(genome_path)
+    download_root.mkdir(parents=True, exist_ok=True)
+    logs_dir = Path(logs_path) if logs_path else download_root.parent / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
-    address_map = {_address_filename(addr): addr for addr in addresses}
-    pending = set(address_map).difference(existing)
-    print(f"{len(pending)} genome data still need to be downloaded.")
+    selected = {item.lower() for item in file_types}
+    addresses = [
+        address
+        for address in _load_rsync_addresses(rsync_path)
+        if _address_type(address) in selected
+    ]
+    existing = _existing_relative_files(download_root)
+
+    address_map = {}
+    for address in addresses:
+        file_type = _address_type(address)
+        name = _address_filename(address)
+        rel_path = str(Path(file_type) / name)
+        address_map[rel_path] = address
+
+    known_missing = _known_missing_relative_files(logs_dir / "missing_assets.tsv")
+    pending = sorted(set(address_map).difference(existing).difference(known_missing))
+    print(f"{len(pending)} selected files still need to be downloaded.")
     if not pending:
         return
 
     start_time = time.time()
     print(time.asctime())
 
-    failures: List[tuple[str, str]] = []
+    failures: List[tuple[str, str, str]] = []
+    missing_assets: List[tuple[str, str, str, str, str]] = []
     succeeded = 0
     with ThreadPoolExecutor(max_workers=max(1, worker)) as executor:
         futures = {}
-        for name in sorted(pending):
-            address = address_map[name]
+        for rel_path in pending:
+            address = address_map[rel_path]
             url = _to_https_url(address)
-            output = os.path.join(genome_path, name)
+            output = download_root / rel_path
+            output.parent.mkdir(parents=True, exist_ok=True)
             future = executor.submit(_download_one, url, output)
             futures[future] = (address, url)
 
         for future in as_completed(futures):
             address, url = futures[future]
-            ok, error = future.result()
+            ok, status, error = future.result()
             if ok:
                 succeeded += 1
+            elif status == "missing":
+                missing_assets.append(
+                    (
+                        _address_accession(address),
+                        _address_type(address),
+                        _address_filename(address),
+                        url,
+                        error,
+                    )
+                )
             else:
-                failures.append((address, f"{url} :: {error}"))
+                failures.append((address, url, error))
+
+    _write_tsv(
+        logs_dir / "missing_assets.tsv",
+        ("accession", "file_type", "filename", "url", "reason"),
+        missing_assets,
+    )
+    _write_tsv(
+        logs_dir / "download_failures.tsv",
+        ("address", "url", "reason"),
+        failures,
+    )
 
     print(f"Retried files: {len(pending)}")
     print(f"Downloaded successfully: {succeeded}")
+    print(f"Missing assets (warn only): {len(missing_assets)}")
     print(f"Download failures: {len(failures)}")
     if failures:
-        for address, error in failures:
-            print(f"[genome-retry-failed] {address} -> {error}")
+        for address, url, error in failures:
+            print(f"[genome-retry-failed] {address} -> {url} :: {error}")
+    print(f"Missing-asset log: {logs_dir / 'missing_assets.tsv'}")
+    print(f"Failure log: {logs_dir / 'download_failures.tsv'}")
 
     end_time = time.time()
     print(f"final time usage {end_time - start_time}")
@@ -224,7 +404,7 @@ def _gunzip_one(gz_file: Path) -> tuple[str, bool, str]:
 def g_unzip(genome_path: str = "Data/download_genome/", worker: int = 4) -> None:
     """Gunzip all ``*.gz`` archives in ``genome_path`` using parallel workers."""
 
-    gz_files = sorted(Path(genome_path).glob("*.gz"))
+    gz_files = sorted(Path(genome_path).rglob("*.gz"))
     if not gz_files:
         print(f"No .gz archives found in {genome_path}")
         return

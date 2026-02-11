@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -23,6 +24,8 @@ from blast_at_local_tools import (
 
 DEFAULT_EMAIL = "a@email.address"
 CLI_RELEASE_LABEL = "CLI-0.1"
+SUPPORTED_FILE_TYPES = ("genome", "gff", "gtf", "protein")
+ACCESSION_PATTERN = re.compile(r"\bGC[AF]_\d+\.\d+\b", re.IGNORECASE)
 
 
 def _normalize_dir_path(path: Path, create: bool = True) -> str:
@@ -45,12 +48,89 @@ def _read_items_from_file(path: Path) -> List[str]:
         return [line.strip() for line in handle if line.strip()]
 
 
+def _dedupe_preserve(values: Sequence[str]) -> List[str]:
+    seen = set()
+    ordered: List[str] = []
+    for value in values:
+        item = value.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def _extract_accessions(text: str) -> List[str]:
+    return [match.upper() for match in ACCESSION_PATTERN.findall(text or "")]
+
+
+def _read_accessions_from_file(path: Path) -> List[str]:
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found: {path}")
+
+    extracted: List[str] = []
+    raw_lines: List[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            raw_lines.append(stripped)
+            extracted.extend(_extract_accessions(stripped))
+
+    if extracted:
+        return _dedupe_preserve(extracted)
+    return _dedupe_preserve(raw_lines)
+
+
+def _parse_file_types(raw_file_types: str | None) -> List[str]:
+    if raw_file_types is None:
+        return ["genome"]
+
+    parsed = [item.strip().lower() for item in raw_file_types.split(",") if item.strip()]
+    if not parsed:
+        return ["genome"]
+
+    invalid = [item for item in parsed if item not in SUPPORTED_FILE_TYPES]
+    if invalid:
+        supported = ",".join(SUPPORTED_FILE_TYPES)
+        raise SystemExit(f"Unsupported --file-types value(s): {','.join(invalid)}. Supported: {supported}")
+    return _dedupe_preserve(parsed)
+
+
+def _infer_run_root(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.name.lower() in {"download", "download_genome", "download_md5"}:
+        return expanded.parent
+    return expanded
+
+
+def _write_resolved_accessions(accessions: Sequence[str], run_root: Path) -> Path:
+    temp_dir = run_root / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    output = temp_dir / "resolved_accessions.txt"
+    with output.open("w", encoding="utf-8") as handle:
+        if accessions:
+            handle.write("\n".join(accessions) + "\n")
+    return output
+
+
 def _collect_gca_ids(args: argparse.Namespace) -> Sequence[str]:
     items: List[str] = []
     if args.gca_list:
-        items.extend(_read_items_from_file(Path(args.gca_list)))
+        items.extend(_read_accessions_from_file(Path(args.gca_list)))
+    if getattr(args, "assembly_table", None):
+        items.extend(_read_accessions_from_file(Path(args.assembly_table)))
     if args.gca:
-        items.extend(args.gca)
+        inline: List[str] = []
+        for raw_value in args.gca:
+            matches = _extract_accessions(raw_value)
+            if matches:
+                inline.extend(matches)
+            elif raw_value.strip():
+                inline.append(raw_value.strip())
+        items.extend(inline)
+    items = _dedupe_preserve(items)
     if not items:
         raise ValueError("No GCA identifiers were provided")
     return items
@@ -98,37 +178,79 @@ def cmd_metadata_download(args: argparse.Namespace) -> None:
         raise SystemExit(str(exc))
     download_path = _normalize_dir_path(Path(args.download_path))
     email = _determine_email(args.email)
-    ftp_download(gca_ids, worker=args.workers, download_path=download_path, email=email)
+    run_root = Path(download_path)
+    resolved_file = _write_resolved_accessions(gca_ids, run_root)
+    error_log_path = run_root / "logs" / "link_download_error.txt"
+    ftp_download(
+        gca_ids,
+        worker=args.workers,
+        download_path=download_path,
+        email=email,
+        error_log_path=str(error_log_path),
+    )
+    print(f"Resolved accession list written to: {resolved_file}")
 
 
 def cmd_metadata_retry(args: argparse.Namespace) -> None:
     download_path = _normalize_dir_path(Path(args.download_path))
     email = _determine_email(args.email)
+    run_root = Path(download_path)
+    error_file = (
+        Path(args.error_file).expanduser()
+        if args.error_file
+        else run_root / "logs" / "link_download_error.txt"
+    )
+    error_log_path = run_root / "logs" / "link_download_error.txt"
     ftp_re_download(
-        error_file=args.error_file,
+        error_file=str(error_file),
         worker=args.workers,
         download_path=download_path,
         email=email,
+        error_log_path=str(error_log_path),
     )
 
 
 def cmd_to_rsync(args: argparse.Namespace) -> None:
     ftp_path = _normalize_dir_path(Path(args.ftp_path), create=False)
     rsync_path = _normalize_dir_path(Path(args.rsync_path))
-    ftp_to_rsync(ftp_path=ftp_path, rsync_path=rsync_path, process_num=args.processes)
+    file_types = _parse_file_types(args.file_types)
+    ftp_to_rsync(
+        ftp_path=ftp_path,
+        rsync_path=rsync_path,
+        process_num=args.processes,
+        file_types=file_types,
+    )
 
 
 def cmd_genome_download(args: argparse.Namespace) -> None:
     _warn_high_workers("genome-download", args.workers)
     genome_path = _normalize_dir_path(Path(args.genome_path))
     rsync_path = _normalize_dir_path(Path(args.rsync_path), create=False)
-    genome_download(genome_path=genome_path, rsync_path=rsync_path, worker=args.workers)
+    file_types = _parse_file_types(args.file_types)
+    run_root = _infer_run_root(Path(genome_path))
+    logs_path = _normalize_dir_path(run_root / "logs")
+    genome_download(
+        genome_path=genome_path,
+        rsync_path=rsync_path,
+        worker=args.workers,
+        file_types=file_types,
+        logs_path=logs_path,
+    )
 
 
 def cmd_genome_retry(args: argparse.Namespace) -> None:
     genome_path = _normalize_dir_path(Path(args.genome_path), create=False)
     rsync_path = _normalize_dir_path(Path(args.rsync_path), create=False)
-    genome_re_download(genome_path=genome_path, rsync_path=rsync_path, worker=args.workers)
+    file_types = _parse_file_types(args.file_types)
+    run_root = _infer_run_root(Path(genome_path))
+    logs_path = _normalize_dir_path(run_root / "logs")
+    genome_re_download(
+        genome_path=genome_path,
+        rsync_path=rsync_path,
+        worker=args.workers,
+        file_types=file_types,
+        logs_path=logs_path,
+    )
 
 
 def cmd_md5_address(args: argparse.Namespace) -> None:
@@ -145,30 +267,37 @@ def cmd_md5_download(args: argparse.Namespace) -> None:
     _warn_high_workers("md5-download", args.workers)
     md5_address_path = _normalize_dir_path(Path(args.md5_address_path), create=False)
     md5_download_path = _normalize_dir_path(Path(args.md5_download_path))
+    run_root = _infer_run_root(Path(md5_download_path))
+    error_log_path = run_root / "logs" / "md5_download_error.txt"
     md5_download(
         md5_download_path=md5_download_path,
         md5_address_path=md5_address_path,
         worker=args.workers,
+        error_log_path=str(error_log_path),
     )
 
 
 def cmd_md5_retry(args: argparse.Namespace) -> None:
     md5_address_path = _normalize_dir_path(Path(args.md5_address_path), create=False)
     md5_download_path = _normalize_dir_path(Path(args.md5_download_path), create=False)
+    run_root = _infer_run_root(Path(md5_download_path))
+    error_log_path = run_root / "logs" / "md5_download_error.txt"
     md5_re_download(
         md5_download_path=md5_download_path,
         md5_address_path=md5_address_path,
         worker=args.workers,
+        error_log_path=str(error_log_path),
     )
 
 
 def cmd_md5_check(args: argparse.Namespace) -> None:
     generated_path = _normalize_dir_path(Path(args.generated_path), create=False)
     download_path = _normalize_dir_path(Path(args.download_path), create=False)
+    run_root = _infer_run_root(Path(download_path))
     output_path = (
         Path(args.not_match_output).expanduser()
         if args.not_match_output
-        else Path.cwd() / "md5_not_match.txt"
+        else run_root / "logs" / "md5_not_match.txt"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     md5_check(
@@ -224,6 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     metadata.add_argument("--gca", nargs="*", help="One or more GCA identifiers")
     metadata.add_argument("--gca-list", help="File containing GCA identifiers")
     metadata.add_argument(
+        "--assembly-table",
+        help="NCBI assembly TSV/table path; GCA/GCF accessions will be extracted automatically",
+    )
+    metadata.add_argument(
         "--download-path",
         default="Data/",
         help="Directory used to store metadata outputs",
@@ -237,8 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metadata_retry.add_argument(
         "--error-file",
-        default="link_download_error.txt",
-        help="File containing failed metadata downloads",
+        help="File containing failed metadata downloads (default: <download-path>/logs/link_download_error.txt)",
     )
     metadata_retry.add_argument(
         "--download-path",
@@ -286,6 +418,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="Data/rsync/",
         help="Directory to store address files for downstream downloads",
     )
+    rsync_parser.add_argument(
+        "--file-types",
+        default="genome",
+        help="Comma-separated asset types to include: genome,gff,gtf,protein",
+    )
     rsync_parser.add_argument("--processes", type=int, default=1, help="Process count")
     rsync_parser.set_defaults(func=cmd_to_rsync)
 
@@ -301,6 +438,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="Data/rsync/",
         help="Directory containing genome URL manifests (rsync/ftp/https)",
     )
+    genome.add_argument(
+        "--file-types",
+        default="genome",
+        help="Comma-separated asset types to download: genome,gff,gtf,protein",
+    )
     genome.add_argument("--workers", type=int, default=2, help="Thread count")
     genome.set_defaults(func=cmd_genome_download)
 
@@ -314,6 +456,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rsync-path",
         default="Data/rsync/",
         help="Directory containing genome URL manifests (rsync/ftp/https)",
+    )
+    genome_retry.add_argument(
+        "--file-types",
+        default="genome",
+        help="Comma-separated asset types to retry: genome,gff,gtf,protein",
     )
     genome_retry.add_argument("--workers", type=int, default=2, help="Thread count")
     genome_retry.set_defaults(func=cmd_genome_retry)
@@ -379,7 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
     md5_checker.add_argument("--processes", type=int, default=1, help="Process count")
     md5_checker.add_argument(
         "--not-match-output",
-        help="Mismatch output file path (default: $PWD/md5_not_match.txt)",
+        help="Mismatch output file path (default: <download-path-parent>/logs/md5_not_match.txt)",
     )
     md5_checker.set_defaults(func=cmd_md5_check)
 
