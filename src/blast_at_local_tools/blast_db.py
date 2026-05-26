@@ -7,9 +7,12 @@ import shutil
 import subprocess
 import time
 from multiprocessing import Process
+from pathlib import Path
 from typing import Iterable, List
 
 import numpy as np
+
+FASTA_SUFFIXES = (".fa", ".fas", ".fasta", ".fna")
 
 
 def make_a_db(
@@ -54,27 +57,30 @@ def make_db_by_ls(
         make_a_db(genome, db_dir_abs_pth_, dbtype_, makeblastdb_bin_)
 
 
-def make_database(
-    genome_path: str = "Data/download_genome/",
-    blastdb_path: str = "Data/blast_db/",
+def make_database_from_files(
+    genome_files: Iterable[str],
+    blastdb_path: str = "Example/output/blast_db/",
     dbtype: str = "nucl",
     makeblastdb_bin: str = "makeblastdb",
     process_num: int = 1,
 ) -> None:
-    """Create BLAST databases from genomes using ``process_num`` workers."""
+    """Create BLAST databases from an explicit iterable of FASTA files."""
+
+    missions = [str(Path(path)) for path in genome_files]
+    if not missions:
+        print("No FASTA files were provided for BLAST database creation.")
+        return
 
     start_time = time.time()
     print(time.asctime())
 
     os.makedirs(blastdb_path, exist_ok=True)
-    missions = [
-        os.path.join(genome_path, name)
-        for name in os.listdir(genome_path)
-    ]
-    chunks = np.array_split(missions, process_num)
+    chunks = np.array_split(missions, max(1, process_num))
 
     jobs: List[Process] = []
     for chunk in chunks:
+        if len(chunk) == 0:
+            continue
         p = Process(
             target=make_db_by_ls,
             args=(list(chunk), blastdb_path, dbtype, makeblastdb_bin),
@@ -90,11 +96,46 @@ def make_database(
     print(time.asctime())
 
 
+def find_fasta_files(genome_path: str = "Example/output/download_genome/", recursive: bool = False) -> List[str]:
+    """Find FASTA files under ``genome_path``.
+
+    ``datasets`` packages are nested, so callers can set ``recursive=True`` for
+    package-style layouts while preserving the old flat-directory default.
+    """
+
+    root = Path(genome_path)
+    iterator = root.rglob("*") if recursive else root.iterdir()
+    return sorted(
+        str(path)
+        for path in iterator
+        if path.is_file() and path.suffix.lower() in FASTA_SUFFIXES
+    )
+
+
+def make_database(
+    genome_path: str = "Example/output/download_genome/",
+    blastdb_path: str = "Example/output/blast_db/",
+    dbtype: str = "nucl",
+    makeblastdb_bin: str = "makeblastdb",
+    process_num: int = 1,
+    recursive: bool = False,
+) -> None:
+    """Create BLAST databases from genomes using ``process_num`` workers."""
+
+    make_database_from_files(
+        find_fasta_files(genome_path, recursive=recursive),
+        blastdb_path=blastdb_path,
+        dbtype=dbtype,
+        makeblastdb_bin=makeblastdb_bin,
+        process_num=process_num,
+    )
+
+
 def database_remove_old(
     GCA_list_remove: Iterable[str],
-    ftp_path: str = "Data/ftp/",
-    blastdb_path: str = "Data/blast_db/",
-    achive_removed_blastdb_path: str = "Data/blast_db_removed/",
+    ftp_path: str = "Example/output/ftp/",
+    blastdb_path: str = "Example/output/blast_db/",
+    achive_removed_blastdb_path: str = "Example/output/blast_db_removed/",
 ) -> None:
     """Archive BLAST databases for assemblies that should be removed."""
 

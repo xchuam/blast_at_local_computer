@@ -1,0 +1,2 @@
+batch	accession_count	input_file	zip_file	log_file	status
+1	3	tmp/ecoli_three_input_download/batches/ncbi_dataset_batch_00001.txt	tmp/ecoli_three_input_download/packages/ncbi_dataset_batch_00001.zip	tmp/ecoli_three_input_download/logs/ncbi_dataset_batch_00001.log	completed
