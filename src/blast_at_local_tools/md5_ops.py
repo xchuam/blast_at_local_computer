@@ -27,8 +27,8 @@ ACCESSION_PATTERN = re.compile(r"(GC[AF]_\d+\.\d+)")
 def md5_address(
     readins: Iterable[str],
     batch: int,
-    ftp_path: str = "Data/ftp/",
-    md5_address_path: str = "Data/md5_address/",
+    ftp_path: str = "Example/output/ftp/",
+    md5_address_path: str = "Example/output/md5_address/",
 ) -> None:
     """Convert FTP manifests into MD5 checksum file addresses."""
 
@@ -44,8 +44,8 @@ def md5_address(
 
 
 def ftp_to_md5(
-    ftp_path: str = "Data/ftp/",
-    md5_address_path: str = "Data/md5_address/",
+    ftp_path: str = "Example/output/ftp/",
+    md5_address_path: str = "Example/output/md5_address/",
     process_num: int = 1,
 ) -> None:
     """Generate MD5 checksum manifest files using ``process_num`` workers."""
@@ -156,8 +156,8 @@ def _extract_md5_stem(filename: str) -> str:
 
 
 def md5_download(
-    md5_download_path: str = "Data/download_md5/",
-    md5_address_path: str = "Data/md5_address/",
+    md5_download_path: str = "Example/output/download_md5/",
+    md5_address_path: str = "Example/output/md5_address/",
     worker: int = 2,
     error_log_path: str | None = None,
 ) -> None:
@@ -209,8 +209,8 @@ def md5_download(
 
 
 def md5_re_download(
-    md5_download_path: str = "Data/download_md5/",
-    md5_address_path: str = "Data/md5_address/",
+    md5_download_path: str = "Example/output/download_md5/",
+    md5_address_path: str = "Example/output/md5_address/",
     worker: int = 2,
     error_log_path: str | None = None,
 ) -> None:
@@ -268,7 +268,7 @@ def md5_re_download(
 def md5_sum(
     file_paths: Sequence[str],
     batch: int,
-    md5_generate_path: str = "Data/generate_md5/",
+    md5_generate_path: str = "Example/output/generate_md5/",
     error_log_path: str = "md5_generated_error.txt",
 ) -> None:
     """Compute MD5 sums for downloaded archives listed in ``file_paths``."""
@@ -293,8 +293,8 @@ def md5_sum(
 
 
 def md5_generate(
-    md5_generate_path: str = "Data/generate_md5/",
-    genome_path: str = "Data/download_genome/",
+    md5_generate_path: str = "Example/output/generate_md5/",
+    genome_path: str = "Example/output/download_genome/",
     process_num: int = 1,
     error_log_path: str | None = None,
 ) -> None:
@@ -337,7 +337,7 @@ def md5_generate(
 def md5sum_check(
     tuples: Sequence[Tuple[str, str]],
     shared_list,
-    md5_download_path: str = "Data/download_md5/",
+    md5_download_path: str = "Example/output/download_md5/",
 ) -> None:
     """Check generated hashes against downloaded md5checksums by exact file name."""
 
@@ -381,8 +381,8 @@ def _load_generated_md5_records(md5_generate_path: str) -> List[Tuple[str, str]]
 
 
 def md5_check(
-    md5_generate_path: str = "Data/generate_md5/",
-    md5_download_path: str = "Data/download_md5/",
+    md5_generate_path: str = "Example/output/generate_md5/",
+    md5_download_path: str = "Example/output/download_md5/",
     process_num: int = 1,
     not_match_output: str = "md5_not_match.txt",
 ) -> None:

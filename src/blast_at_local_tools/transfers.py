@@ -85,8 +85,8 @@ def _address_accession(address: str) -> str:
 def ftp_modify(
     readins: Iterable[str],
     batch: int,
-    ftp_path: str = "Data/ftp/",
-    rsync_path: str = "Data/rsync/",
+    ftp_path: str = "Example/output/ftp/",
+    rsync_path: str = "Example/output/rsync/",
     file_types: Sequence[str] = ("genome",),
 ) -> None:
     """Convert FTP URLs stored in ``ftp_path`` files to rsync addresses."""
@@ -103,8 +103,8 @@ def ftp_modify(
 
 
 def ftp_to_rsync(
-    ftp_path: str = "Data/ftp/",
-    rsync_path: str = "Data/rsync/",
+    ftp_path: str = "Example/output/ftp/",
+    rsync_path: str = "Example/output/rsync/",
     process_num: int = 1,
     file_types: Sequence[str] = ("genome",),
 ) -> None:
@@ -210,8 +210,8 @@ def _known_missing_relative_files(log_path: Path) -> set[str]:
 
 
 def genome_download(
-    genome_path: str = "Data/download_genome/",
-    rsync_path: str = "Data/rsync/",
+    genome_path: str = "Example/output/download_genome/",
+    rsync_path: str = "Example/output/rsync/",
     worker: int = 2,
     file_types: Sequence[str] = ("genome",),
     logs_path: str | None = None,
@@ -295,8 +295,8 @@ def genome_download(
 
 
 def genome_re_download(
-    genome_path: str = "Data/download_genome/",
-    rsync_path: str = "Data/rsync/",
+    genome_path: str = "Example/output/download_genome/",
+    rsync_path: str = "Example/output/rsync/",
     worker: int = 2,
     file_types: Sequence[str] = ("genome",),
     logs_path: str | None = None,
@@ -401,7 +401,7 @@ def _gunzip_one(gz_file: Path) -> tuple[str, bool, str]:
     return str(gz_file), False, result.stderr.strip()
 
 
-def g_unzip(genome_path: str = "Data/download_genome/", worker: int = 4) -> None:
+def g_unzip(genome_path: str = "Example/output/download_genome/", worker: int = 4) -> None:
     """Gunzip all ``*.gz`` archives in ``genome_path`` using parallel workers."""
 
     gz_files = sorted(Path(genome_path).rglob("*.gz"))

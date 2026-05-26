@@ -1,180 +1,192 @@
-# BLAST at local computer (V: CLI-0.1)
-**Current Version provides commandline compatible rsync download for large amount of genome from NCBI genome Datasets**
+# BLAST at local computer (V: CLI-0.2)
 
-Here we provide a tool **Blast_at_local_computer.ipynb** for the following works:
-* download genome data from NCBI
-* check downloaded genome data files by MD5 value
-* make a local custom genome database
-* update the local custom genome database
-* run BLAST search against the local custom genome database
-* extract BLAST hit sequences
+This repo helps you download NCBI genome assemblies in batches, organize the downloaded packages, and run BLAST against those genomes on a local computer.
 
-Although the original notebook still covers the end-to-end BLAST workflow, this CLI-focused release concentrates on the downloading and verification stages so you can prepare large collections of genomes for later analysis.
+It is designed for users who start from an NCBI Assembly or Datasets TSV table and want a reproducible path from that table to a local BLAST database. The command-line script handles the downloading step with the NCBI `datasets` CLI. The Jupyter notebook then handles the BLAST step after the packages have been extracted.
+
+Use this repo when you want to:
+
+* convert an NCBI assembly TSV table into the accession-list format expected by `datasets`
+* split many assemblies into practical download batches
+* choose which NCBI Datasets package files to download, such as genome FASTA, GFF3, GTF, protein, CDS, or GBFF
+* keep download commands, batch manifests, logs, and metadata together for later audit
+* build local BLAST databases from extracted NCBI Datasets packages
+
+The current workflow is:
+
+1. Download an NCBI genome assembly TSV table.
+2. Use this repo to extract assembly accessions from the TSV.
+3. Batch accessions into `datasets download genome accession --inputfile ...` calls.
+4. Download and extract NCBI Datasets packages.
+5. Use `Blast_at_local_computer.ipynb` to build BLAST databases and run local BLAST searches.
+
+This version replaces the old rsync-oriented workflow with the current NCBI Datasets workflow.
+
+## Download The Assembly TSV
+
+Start from the NCBI Assembly or Datasets genome table, filter to the assemblies you want, and download the table as TSV. The TSV can include many columns; this repo will extract the Assembly accessions from it.
+
+![Screenshot_NCBI.png](Screenshot_NCBI.PNG)
+
+The full NCBI table is not the direct input format expected by `datasets`. The `datasets` CLI expects Assembly or BioProject accessions as command arguments, or a plain text `--inputfile` with one accession per line. This repo converts TSV tables into that accession-list format.
+
+## Batch Size
+
+NCBI documents the regular genome-package download workflow as best for smaller downloads: fewer than 1,000 genomes or less than 15 GB, whichever is smaller. For 1,000 or more genomes, NCBI recommends the dehydrated workflow: download a metadata/location zip, unzip it, then run `datasets rehydrate`.
+
+This repo conservatively batches accession lists at up to 1,000 assemblies per `datasets` call. That keeps each request inside the documented small-download range and makes retries/auditing practical.
+
+References:
+
+* NCBI regular genome downloads: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/download-genome/
+* NCBI large genome downloads: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
+* NCBI `datasets download genome` reference: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/
 
 ## Dependencies
 
-### Operating system and command line utilities
+### Command Line Tools
+
 * GNU/Linux environment with Bash shell
-* `rsync` for high-volume downloads
-* Coreutils providing `md5sum`
-* Optional: `ncbi-blast+` for downstream BLAST usage in the notebook
+* NCBI `datasets` CLI
+  * If `datasets` is not in `$PATH`, pass `--datasets-bin /path/to/datasets` or set `NCBI_DATASETS_CLI=/path/to/datasets`.
+* `ncbi-blast+` for the notebook BLAST workflow
 
 ### Python
-* Python 3.9 or newer
+
+* Python 3.10 or newer
 * Packages: `biopython`, `pandas`, `numpy`
 
-Install the Python packages with:
+Install Python packages with:
+
 ```bash
 python -m pip install biopython pandas numpy
 ```
 
-## Code organization
+## Download Workflow
 
-All Python sources now live inside the top-level ``src/`` directory. This keeps
-the repository root tidy and makes future reorganizations easier. Add the
-directory to your ``PYTHONPATH`` (for example with
-``export PYTHONPATH=src:$PYTHONPATH``) when running code outside of the provided
-CLI entry point.
+Run all commands from the repository root.
 
-Within ``src/`` the helper routines that power the CLI live in the
-``blast_at_local_tools`` package. The previous monolithic
-``blast_at_local_tools.py`` module has been split into focused submodules:
+### Dry Run
 
-* ``metadata.py`` – Entrez lookups and FTP manifest generation
-* ``transfers.py`` – rsync address conversion, genome downloads, and gunzip
-* ``md5_ops.py`` – MD5 manifest conversion, download, and validation helpers
-* ``blast_db.py`` – local BLAST database construction and archival utilities
-* ``blast_pipeline.py`` – parallel BLAST execution helpers
-* ``results.py`` – sequence and tabular extraction from BLAST output
+Use `--dry-run` first to inspect accession extraction, batch files, and generated commands without downloading packages.
 
-Once ``src/`` is on your import path, ``import blast_at_local_tools`` exposes the
-same public functions as before, so existing notebooks and scripts can continue
-to work without further changes.
-
-## Download FTP address
-
-The genome data should be downloaded from the NCBI FTP site according to the FTP address. To get the FTP address, a custom assembly ID table should be provided as shown in the following steps:
-1. go to the NCBI Assembly website
-2. search the assemblies for the costumed genome database
-3. download the ID table 
-
-Here is an example to get assembly ID table for *Listeria monocytogenes*. 
-![Screenshot_NCBI.png](Screenshot_NCBI.PNG)
-By *Download -> Download Talbe -> Create File, a `TSV` file can be downloaded.
-
-The downloaded table contains assembly accessions (GCA/GCF identifiers). Save a plain-text list with one accession per line—this file will be referenced by the CLI in the following steps.
-
-### Command line workflow overview
-
-All commands are executed from the project root with:
 ```bash
-python src/blast_at_local_computer.py <subcommand> [options]
+python src/blast_at_local_computer.py datasets-download \
+  --assembly-table assemblies.tsv \
+  --output-path Example/output/ncbi_datasets \
+  --include genome,gff3,gtf,protein \
+  --batch-size 1000 \
+  --limit 10 \
+  --dry-run
 ```
-Use `--help` on any subcommand to inspect available flags.
 
-1. **Fetch assembly metadata and FTP links**
-   ```bash
-   python src/blast_at_local_computer.py metadata-download \
-    --assembly-table assembly_result.tsv \
-    --download-path Data/ \
-    --workers 2 \
-    --email your@email
-   ```
-   * `metadata-download` accepts three accession sources: `--assembly-table`, `--gca-list`, and `--gca`.
-   * Accessions (`GCA_*` / `GCF_*`) are deduplicated while preserving order.
-   * Resolved accessions are written to `Data/temp/resolved_accessions.txt`.
-   * Metadata JSON and FTP links are written into `Data/jsons/` and `Data/ftp/`.
-   * Provide your contact email via `--email` or set the `NCBI_EMAIL` environment variable.
-   * Errors are logged to `Data/logs/link_download_error.txt`.
-   * If any assemblies fail, retry with `metadata-retry --download-path Data/`.
+> After checking the dry-run output, run the same command without `--dry-run` to download packages. `--limit` is for tests and probes; omit it for production runs.
 
-2. **Enrich metadata with BioSample attributes (country/location, host, isolate, source, year)**
-   ```bash
-   python src/blast_at_local_computer.py metadata-enrich \
-   --json-path Data/jsons/ \
-   --output-tsv Data/metadata_enriched.tsv \
-   --workers 2 \
-   --email your@email \
-   --error-file Data/metadata_enrich_error.txt
-   ```
-   * This reads JSON files created by `metadata-download`, fetches BioSample XML, and writes an enriched TSV.
-   * Key output fields include `country_location`, `isolate`, `host`, `isolation_source`, and `year`.
-   * Use `--error-file` to store record-level enrichment failures without interrupting the full run.
+### Download Packages
 
-3. **Convert FTP links to rsync addresses**
-   ```bash
-   python src/blast_at_local_computer.py make-rsync \
-   --ftp-path Data/ftp/ \
-   --rsync-path Data/rsync/ \
-   --file-types genome,gff,gtf,protein \
-   --processes 4
-   ```
-   This scans the FTP text files and creates rsync-ready address batches under `Data/rsync/` for the selected file types.
+```bash
+python src/blast_at_local_computer.py datasets-download \
+  --assembly-table assemblies.tsv \
+  --output-path Example/output/ncbi_datasets \
+  --include genome,gff3,gtf,protein \
+  --datasets-bin /path/to/datasets \
+  --batch-size 1000 \
+  --workers 1 \
+  --extract
+```
 
-4. **Download selected NCBI assets**
-   ```bash
-   python src/blast_at_local_computer.py genome-download \
-   --rsync-path Data/rsync/ \
-   --genome-path Data/download/ \
-   --file-types genome,gff,gtf,protein \
-   --workers 2
-   ```
-   * Downloads selected archives via HTTPS converted from rsync/ftp links.
-   * Output is grouped into type subfolders:
-     * `Data/download/genome/`
-     * `Data/download/gff/`
-     * `Data/download/gtf/`
-     * `Data/download/protein/`
-   * Default worker count is `2`.
-   * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
-   * Missing selected assets on NCBI are non-fatal and logged to `Data/logs/missing_assets.tsv`.
-   * Non-missing transfer failures are logged to `Data/logs/download_failures.tsv`.
-   * If the command is interrupted, use `genome-retry` to resume unfinished files based on existing output files.
+The command writes:
 
-5. **Prepare MD5 checksum address list**
-   ```bash
-   python src/blast_at_local_computer.py md5-address \
-   --ftp-path Data/ftp/ \
-   --md5-address-path Data/md5_address/ \
-   --processes 4
-   ```
-   Each FTP entry is converted into the location of its companion `md5checksums.txt` file.
+* `resolved_accessions.txt` - deduplicated accession list
+* `batches/*.txt` - one accession list per `datasets` call
+* `packages/*.zip` - downloaded NCBI Datasets zip packages
+* `extracted/*/` - extracted package contents when `--extract` is used
+* `download_commands.sh` - shell-quoted commands for audit or manual reruns
+* `batches_manifest.tsv` and `logs/failed_batches.tsv` - batch status files
 
-6. **Download MD5 checksum files**
-   ```bash
-   python src/blast_at_local_computer.py md5-download \
-   --md5-address-path Data/md5_address/ \
-   --md5-download-path Data/download_md5/ \
-   --workers 2
-   ```
-   * Retrieves checksum manifests for every genome batch.
-   * Default worker count is `2`.
-   * Warning: if `--workers > 5`, the CLI prints a warning because NCBI rsync allows max 50 connections, but fewer than 5 is strongly suggested.
-   * Re-run failed transfers with `md5-retry`.
-   * MD5 download failures are logged to `Data/logs/md5_download_error.txt`.
+### Choose Package Contents
 
-7. **Validate downloads using MD5**
-   ```bash
-   python src/blast_at_local_computer.py md5-check \
-   --generated-path Data/generated_md5/ \
-   --download-path Data/download_md5/ \
-   --processes 4 \
-   --not-match-output Data/md5_not_match.txt
-   ```
-   Generated MD5 values can be compared against the downloaded manifests. MD5 matching is performed by exact downloaded file name (supports genome, gff, gtf, and protein assets). Use the notebook utilities (or `md5_generate`) to create local MD5 lists before running this command. Mismatch IDs are always written to file; if `--not-match-output` is omitted, the default output is `Data/logs/md5_not_match.txt`.
+Use `--include` to choose package elements. Supported values mirror NCBI `datasets`:
 
-8. **Decompress genome archives**
-   ```bash
-   python src/blast_at_local_computer.py gunzip \
-   --genome-path Data/download_genome/ \
-   --workers 4
-   ```
-   This helper extracts all `*.gz` files in parallel once you are confident in the checksum validation. Warning: if `--workers > 15`, the CLI warns that HDD throughput may not handle so many simultaneous decompressions.
+* `genome`
+* `rna`
+* `protein`
+* `cds`
+* `gff3`
+* `gtf`
+* `gbff`
+* `seq-report`
+* `all`
+* `none`
 
-## Notes on blast and downstream analysis
+Convenience aliases are accepted: `fasta` maps to `genome`, and `gff` maps to `gff3`.
 
-The CLI is intentionally limited to acquisition, verification, and preparation steps. Tasks such as database construction, BLAST execution, and hit extraction remain available through the original **Blast_at_local_computer.ipynb** notebook or your preferred tooling. This separation keeps the command line interface focused on the high-volume download workflow.
+### Large Downloads
+
+For large jobs, use the dehydrated workflow:
+
+```bash
+python src/blast_at_local_computer.py datasets-download \
+  --assembly-table assemblies.tsv \
+  --output-path Example/output/ncbi_datasets \
+  --include genome,gff3,protein \
+  --batch-size 1000 \
+  --dehydrated \
+  --extract \
+  --rehydrate
+```
+
+## Accession Selection
+
+When an assembly table contains paired GenBank (`GCA_`) and RefSeq (`GCF_`) rows, the default is:
+
+```bash
+--source-preference refseq
+```
+
+That keeps one RefSeq accession per paired assembly when available. Other options are:
+
+* `--source-preference genbank`
+* `--source-preference as-is`
+* `--source-preference both`
+
+## Jupyter BLAST Workflow
+
+Use **Blast_at_local_computer.ipynb** after package extraction. The notebook:
+
+* writes a manifest of package files found under `Example/output/ncbi_datasets/extracted/`
+* builds BLAST databases from discovered genomic FASTA files
+* runs BLAST against the local databases
+* extracts hit sequences and tabular results
+
+Core notebook calls:
+
+```python
+import blast_at_local_tools as b
+
+b.write_datasets_file_manifest(
+    "Example/output/ncbi_datasets/extracted",
+    "Example/output/ncbi_datasets/file_manifest.tsv",
+)
+
+b.make_blast_databases_from_datasets(
+    "Example/output/ncbi_datasets/extracted",
+    blastdb_path="Example/output/blast_db",
+    file_type="genome",
+    process_num=2,
+)
+```
+
+## Bundled Examples
+
+Small input examples live in `Example/input/`. Small output examples live in `Example/output/`. The `Example/output/ecoli_three_input_download/` folder contains the accession list, batch manifest, generated command, and Datasets metadata files from a three-assembly test run. Large downloaded FASTA/GFF/GTF files and zip packages are intentionally left out; regenerate them with the download command when needed.
+
+## Deprecated Legacy Workflow
+
+The previous FTP/rsync workflow is deprecated in this repo because NCBI is moving away from that access pattern. Legacy helper modules may remain temporarily for compatibility, but new usage and documentation should use `datasets-download` and **Blast_at_local_computer.ipynb**.
 
 ## Citation
-If you use blast_at_local_computer in a scientific publication, we would appreciate citations to the following paper:
+
+If you use blast_at_local_computer in a scientific publication, we would appreciate citations to:
+
 > Ma, X., Chen, J., Zwietering, M. H., Abee, T., & Den Besten, H. M. W. (2024). Stress resistant *rpsU* variants of *Listeria monocytogenes* can become underrepresented due to enrichment bias. International Journal of Food Microbiology, 416, 110680. https://doi.org/10.1016/j.ijfoodmicro.2024.110680

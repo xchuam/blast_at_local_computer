@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, List, Sequence
 
 from blast_at_local_tools import (
+    MAX_DATASETS_ACCESSIONS_PER_BATCH,
     ftp_download,
     ftp_re_download,
     ftp_to_md5,
@@ -20,10 +21,15 @@ from blast_at_local_tools import (
     md5_download,
     md5_re_download,
     metadata_enrich,
+    normalize_include_values,
+    read_accessions_from_assembly_table,
+    read_accessions_from_list,
+    resolve_datasets_binary,
+    run_datasets_batches,
 )
 
 DEFAULT_EMAIL = "a@email.address"
-CLI_RELEASE_LABEL = "CLI-0.1"
+CLI_RELEASE_LABEL = "CLI-0.2"
 SUPPORTED_FILE_TYPES = ("genome", "gff", "gtf", "protein")
 ACCESSION_PATTERN = re.compile(r"\bGC[AF]_\d+\.\d+\b", re.IGNORECASE)
 
@@ -133,6 +139,50 @@ def _collect_gca_ids(args: argparse.Namespace) -> Sequence[str]:
     items = _dedupe_preserve(items)
     if not items:
         raise ValueError("No GCA identifiers were provided")
+    return items
+
+
+def _collect_datasets_accessions(args: argparse.Namespace) -> Sequence[str]:
+    items: List[str] = []
+
+    def remaining_limit() -> int | None:
+        if args.limit is None:
+            return None
+        current_count = len(_dedupe_preserve(items))
+        return max(args.limit - current_count, 0)
+
+    if args.accession_list:
+        limit = remaining_limit()
+        if limit != 0:
+            items.extend(read_accessions_from_list(Path(args.accession_list), limit=limit))
+    if args.assembly_table:
+        limit = remaining_limit()
+        if limit != 0:
+            items.extend(
+                read_accessions_from_assembly_table(
+                    Path(args.assembly_table),
+                    accession_column=args.accession_column,
+                    paired_accession_column=args.paired_accession_column,
+                    source_preference=args.source_preference,
+                    limit=limit,
+                )
+            )
+    if args.accession:
+        inline: List[str] = []
+        for raw_value in args.accession:
+            if remaining_limit() == 0:
+                break
+            matches = _extract_accessions(raw_value)
+            if matches:
+                inline.extend(matches)
+            elif raw_value.strip():
+                inline.append(raw_value.strip())
+        items.extend(inline)
+    items = _dedupe_preserve(items)
+    if args.limit is not None:
+        items = items[: args.limit]
+    if not items:
+        raise ValueError("No NCBI Assembly or BioProject accessions were provided")
     return items
 
 
@@ -338,6 +388,67 @@ def cmd_metadata_enrich(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_datasets_download(args: argparse.Namespace) -> None:
+    try:
+        accessions = _collect_datasets_accessions(args)
+        include_values = normalize_include_values(args.include)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+    output_dir = Path(args.output_path).expanduser()
+    datasets_bin = resolve_datasets_binary(args.datasets_bin)
+    if args.workers > 5:
+        print(
+            (
+                "\n"
+                "================================ WARNING ================================\n"
+                "Running many datasets downloads in parallel can trigger throttling and\n"
+                "create very large local writes. Keep --workers low unless you know the\n"
+                "storage and network can handle it.\n"
+                f"Current datasets-download workers: {args.workers}\n"
+                "=========================================================================\n"
+            ),
+            file=sys.stderr,
+        )
+
+    try:
+        summary = run_datasets_batches(
+            accessions=accessions,
+            output_dir=output_dir,
+            include_values=include_values,
+            datasets_bin=datasets_bin,
+            batch_size=args.batch_size,
+            prefix=args.prefix,
+            workers=args.workers,
+            dehydrated=args.dehydrated,
+            dry_run=args.dry_run,
+            skip_existing=not args.overwrite,
+            extract=args.extract,
+            rehydrate=args.rehydrate,
+            no_progressbar=not args.show_progressbar,
+            fast_zip_validation=args.fast_zip_validation,
+            api_key=args.api_key,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+    print(f"Datasets CLI: {datasets_bin}")
+    print(f"Accessions: {summary.total_accessions}")
+    print(f"Batches: {summary.total_batches}")
+    if summary.dry_run:
+        print("Dry run only: no datasets download commands were executed.")
+    else:
+        print(f"Completed batches: {summary.completed_batches}")
+        print(f"Skipped existing batches: {summary.skipped_batches}")
+        print(f"Failed batches: {summary.failed_batches}")
+    print(f"Resolved accessions: {summary.resolved_accessions_file}")
+    print(f"Batch manifest: {summary.batch_manifest_file}")
+    print(f"Command manifest: {summary.command_manifest_file}")
+    print(f"Failure manifest: {summary.failures_file}")
+    if summary.failed_batches:
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -346,6 +457,105 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    datasets_parser = subparsers.add_parser(
+        "datasets-download",
+        help="Batch NCBI Datasets genome downloads from accession lists or assembly TSV tables",
+    )
+    datasets_parser.add_argument(
+        "--assembly-table",
+        help="NCBI assembly TSV/table path; accessions are extracted and batched",
+    )
+    datasets_parser.add_argument(
+        "--accession-list",
+        help="Plain text file with one Assembly/BioProject accession per line",
+    )
+    datasets_parser.add_argument(
+        "--accession",
+        nargs="*",
+        help="One or more Assembly/BioProject accessions provided on the command line",
+    )
+    datasets_parser.add_argument(
+        "--source-preference",
+        choices=("refseq", "genbank", "as-is", "both"),
+        default="refseq",
+        help=(
+            "How to choose accessions from assembly tables with paired GCA/GCF rows "
+            "(default: refseq)"
+        ),
+    )
+    datasets_parser.add_argument(
+        "--accession-column",
+        help="Assembly table column to read (default: auto-detect Assembly Accession)",
+    )
+    datasets_parser.add_argument(
+        "--paired-accession-column",
+        help="Paired accession column to use for refseq/genbank preference (default: auto-detect)",
+    )
+    datasets_parser.add_argument(
+        "--include",
+        default="genome",
+        help=(
+            "Comma-separated datasets include values: genome,rna,protein,cds,gff3,gtf,"
+            "gbff,seq-report,all,none. Aliases: fasta->genome, gff->gff3"
+        ),
+    )
+    datasets_parser.add_argument(
+        "--output-path",
+        default="Example/output/ncbi_datasets/",
+        help="Directory for batch files, zip packages, logs, and manifests",
+    )
+    datasets_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=MAX_DATASETS_ACCESSIONS_PER_BATCH,
+        help=f"Accessions per datasets call, max {MAX_DATASETS_ACCESSIONS_PER_BATCH}",
+    )
+    datasets_parser.add_argument(
+        "--limit",
+        type=int,
+        help="Use only the first N resolved accessions; useful for tests",
+    )
+    datasets_parser.add_argument("--prefix", default="ncbi_dataset", help="Output batch filename prefix")
+    datasets_parser.add_argument("--datasets-bin", help="Path to the NCBI datasets executable")
+    datasets_parser.add_argument("--workers", type=int, default=1, help="Concurrent datasets batches")
+    datasets_parser.add_argument(
+        "--dehydrated",
+        action="store_true",
+        help="Pass --dehydrated to datasets for large-package workflows",
+    )
+    datasets_parser.add_argument(
+        "--extract",
+        action="store_true",
+        help="Extract each downloaded zip under <output-path>/extracted/",
+    )
+    datasets_parser.add_argument(
+        "--rehydrate",
+        action="store_true",
+        help="Extract each zip and run datasets rehydrate for each batch",
+    )
+    datasets_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only write resolved accessions, batch files, and command manifest",
+    )
+    datasets_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-run batches even when the target zip already exists",
+    )
+    datasets_parser.add_argument(
+        "--show-progressbar",
+        action="store_true",
+        help="Allow datasets progress bars in batch logs",
+    )
+    datasets_parser.add_argument(
+        "--fast-zip-validation",
+        action="store_true",
+        help="Pass --fast-zip-validation to datasets",
+    )
+    datasets_parser.add_argument("--api-key", help="NCBI API key passed to datasets")
+    datasets_parser.set_defaults(func=cmd_datasets_download)
 
     metadata = subparsers.add_parser(
         "metadata-download", help="Download assembly metadata and FTP links"
@@ -358,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metadata.add_argument(
         "--download-path",
-        default="Data/",
+        default="Example/output/",
         help="Directory used to store metadata outputs",
     )
     metadata.add_argument("--workers", type=int, default=2, help="Thread count")
@@ -374,7 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metadata_retry.add_argument(
         "--download-path",
-        default="Data/",
+        default="Example/output/",
         help="Directory used to store metadata outputs",
     )
     metadata_retry.add_argument("--workers", type=int, default=2, help="Thread count")
@@ -387,7 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metadata_enrich_parser.add_argument(
         "--json-path",
-        default="Data/jsons/",
+        default="Example/output/jsons/",
         help="Directory containing metadata JSON files",
     )
     metadata_enrich_parser.add_argument(
@@ -411,11 +621,11 @@ def build_parser() -> argparse.ArgumentParser:
         "make-rsync", help="Convert FTP links to rsync-style address files"
     )
     rsync_parser.add_argument(
-        "--ftp-path", default="Data/ftp/", help="Directory containing FTP link files"
+        "--ftp-path", default="Example/output/ftp/", help="Directory containing FTP link files"
     )
     rsync_parser.add_argument(
         "--rsync-path",
-        default="Data/rsync/",
+        default="Example/output/rsync/",
         help="Directory to store address files for downstream downloads",
     )
     rsync_parser.add_argument(
@@ -431,11 +641,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Download genomes (auto-converts rsync/ftp links to HTTPS)",
     )
     genome.add_argument(
-        "--genome-path", default="Data/download_genome/", help="Output directory"
+        "--genome-path", default="Example/output/download_genome/", help="Output directory"
     )
     genome.add_argument(
         "--rsync-path",
-        default="Data/rsync/",
+        default="Example/output/rsync/",
         help="Directory containing genome URL manifests (rsync/ftp/https)",
     )
     genome.add_argument(
@@ -450,11 +660,11 @@ def build_parser() -> argparse.ArgumentParser:
         "genome-retry", help="Retry failed genome downloads from URL manifests"
     )
     genome_retry.add_argument(
-        "--genome-path", default="Data/download_genome/", help="Output directory"
+        "--genome-path", default="Example/output/download_genome/", help="Output directory"
     )
     genome_retry.add_argument(
         "--rsync-path",
-        default="Data/rsync/",
+        default="Example/output/rsync/",
         help="Directory containing genome URL manifests (rsync/ftp/https)",
     )
     genome_retry.add_argument(
@@ -469,11 +679,11 @@ def build_parser() -> argparse.ArgumentParser:
         "md5-address", help="Generate rsync addresses for MD5 files"
     )
     md5_address.add_argument(
-        "--ftp-path", default="Data/ftp/", help="Directory containing FTP link files"
+        "--ftp-path", default="Example/output/ftp/", help="Directory containing FTP link files"
     )
     md5_address.add_argument(
         "--md5-address-path",
-        default="Data/md5_address/",
+        default="Example/output/md5_address/",
         help="Directory to store MD5 manifest URL files",
     )
     md5_address.add_argument("--processes", type=int, default=1, help="Process count")
@@ -485,12 +695,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     md5_dl.add_argument(
         "--md5-address-path",
-        default="Data/md5_address/",
+        default="Example/output/md5_address/",
         help="Directory containing MD5 URL manifests (rsync/ftp/https)",
     )
     md5_dl.add_argument(
         "--md5-download-path",
-        default="Data/download_md5/",
+        default="Example/output/download_md5/",
         help="Directory to store downloaded MD5 files",
     )
     md5_dl.add_argument("--workers", type=int, default=2, help="Thread count")
@@ -499,12 +709,12 @@ def build_parser() -> argparse.ArgumentParser:
     md5_retry = subparsers.add_parser("md5-retry", help="Retry failed MD5 downloads")
     md5_retry.add_argument(
         "--md5-address-path",
-        default="Data/md5_address/",
+        default="Example/output/md5_address/",
         help="Directory containing MD5 URL manifests (rsync/ftp/https)",
     )
     md5_retry.add_argument(
         "--md5-download-path",
-        default="Data/download_md5/",
+        default="Example/output/download_md5/",
         help="Directory to store downloaded MD5 files",
     )
     md5_retry.add_argument("--workers", type=int, default=2, help="Thread count")
@@ -515,12 +725,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     md5_checker.add_argument(
         "--generated-path",
-        default="Data/generated_md5/",
+        default="Example/output/generated_md5/",
         help="Directory containing generated MD5 sums",
     )
     md5_checker.add_argument(
         "--download-path",
-        default="Data/download_md5/",
+        default="Example/output/download_md5/",
         help="Directory with downloaded MD5 sums",
     )
     md5_checker.add_argument("--processes", type=int, default=1, help="Process count")
@@ -534,7 +744,7 @@ def build_parser() -> argparse.ArgumentParser:
         "gunzip", help="Decompress downloaded genome archives"
     )
     gunzip_parser.add_argument(
-        "--genome-path", default="Data/download_genome/", help="Directory with genomes"
+        "--genome-path", default="Example/output/download_genome/", help="Directory with genomes"
     )
     gunzip_parser.add_argument(
         "--workers",
