@@ -1,14 +1,26 @@
 # BLAST at local computer (V: CLI-0.2)
 
-Download many NCBI genome assemblies with the NCBI `datasets` CLI, then build and query local BLAST databases from the downloaded packages.
+This repo helps you download NCBI genome assemblies in batches, organize the downloaded packages, and run BLAST against those genomes on a local computer.
 
-This version replaces the old rsync-oriented workflow. The current workflow is:
+It is designed for users who start from an NCBI Assembly or Datasets TSV table and want a reproducible path from that table to a local BLAST database. The command-line script handles the downloading step with the NCBI `datasets` CLI. The Jupyter notebook then handles the BLAST step after the packages have been extracted.
+
+Use this repo when you want to:
+
+* convert an NCBI assembly TSV table into the accession-list format expected by `datasets`
+* split many assemblies into practical download batches
+* choose which NCBI Datasets package files to download, such as genome FASTA, GFF3, GTF, protein, CDS, or GBFF
+* keep download commands, batch manifests, logs, and metadata together for later audit
+* build local BLAST databases from extracted NCBI Datasets packages
+
+The current workflow is:
 
 1. Download an NCBI genome assembly TSV table.
-2. Use this repo to extract Assembly accessions from the TSV.
+2. Use this repo to extract assembly accessions from the TSV.
 3. Batch accessions into `datasets download genome accession --inputfile ...` calls.
-4. Choose which package files to include, such as genome FASTA, GFF3, GTF, protein, CDS, or GBFF.
-5. Use the Jupyter notebook to build BLAST databases from extracted Datasets packages.
+4. Download and extract NCBI Datasets packages.
+5. Use `Blast_at_local_computer.ipynb` to build BLAST databases and run local BLAST searches.
+
+This version replaces the old rsync-oriented workflow with the current NCBI Datasets workflow.
 
 ## Download The Assembly TSV
 
@@ -60,15 +72,15 @@ Use `--dry-run` first to inspect accession extraction, batch files, and generate
 
 ```bash
 python src/blast_at_local_computer.py datasets-download \
-  --assembly-table /data/share_data/Softwares/blast_at_local_computer/test_input/Ecoli_ncbi_datasets.tsv \
-  --output-path tmp/ecoli_datasets_test \
+  --assembly-table assemblies.tsv \
+  --output-path Example/output/ncbi_datasets \
   --include genome,gff3,gtf,protein \
   --batch-size 1000 \
   --limit 10 \
   --dry-run
 ```
 
-`--limit` is for tests and probes. Omit it for production runs.
+> After checking the dry-run output, run the same command without `--dry-run` to download packages. `--limit` is for tests and probes; omit it for production runs.
 
 ### Download Packages
 
@@ -168,17 +180,6 @@ b.make_blast_databases_from_datasets(
 ## Bundled Examples
 
 Small input examples live in `Example/input/`. Small output examples live in `Example/output/`. The `Example/output/ecoli_three_input_download/` folder contains the accession list, batch manifest, generated command, and Datasets metadata files from a three-assembly test run. Large downloaded FASTA/GFF/GTF files and zip packages are intentionally left out; regenerate them with the download command when needed.
-
-## Code Organization
-
-Python sources live in `src/`.
-
-* `blast_at_local_computer.py` - command-line entry point
-* `blast_at_local_tools/datasets_cli.py` - TSV accession extraction, batching, command manifests, and package download execution
-* `blast_at_local_tools/datasets_package.py` - extracted package discovery and BLAST database preparation
-* `blast_at_local_tools/blast_db.py` - local BLAST database construction
-* `blast_at_local_tools/blast_pipeline.py` - BLAST execution helpers
-* `blast_at_local_tools/results.py` - BLAST result extraction helpers
 
 ## Deprecated Legacy Workflow
 
