@@ -93,10 +93,10 @@ def merge_seq(query: str, extract_seq_path: str) -> None:
 
 
 def blast_result_seq(
-    blastdb_path: str = "Data/blast_db/",
-    blast_output_path: str = "Data/blast_output/",
-    query_path: str = "Data/example_query.fas",
-    extract_seq_path: str = "Data/extract_seq/",
+    blastdb_path: str = "Example/output/blast_db/",
+    blast_output_path: str = "Example/output/blast_output/",
+    query_path: str = "Example/input/example_query.fas",
+    extract_seq_path: str = "Example/output/extract_seq/",
     dtypes = None,
     blastdbcmd_bin: str = "blastdbcmd",
     process_num: int = 1,
@@ -184,9 +184,9 @@ def merge_tab(query: str, extract_tab_path: str, columns: Sequence[str]) -> None
 
 
 def blast_result_df(
-    blast_output_path: str = "Data/blast_output/",
-    query_path: str = "Data/example_query.fas",
-    extract_tab_path: str = "Data/extract_tab/",
+    blast_output_path: str = "Example/output/blast_output/",
+    query_path: str = "Example/input/example_query.fas",
+    extract_tab_path: str = "Example/output/extract_tab/",
     dtypes = None,
     columns: Sequence[str] | None = None,
     process_num: int = 1,

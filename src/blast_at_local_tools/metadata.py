@@ -37,7 +37,7 @@ def get_assembly_summary(entrez_id: Sequence[str]) -> dict:
 def get_assemblies(
     gca_id: str,
     download: bool = False,
-    path: str = "Data/",
+    path: str = "Example/output/",
     email: str = "a@email.address",
     error_log_path: str = "link_download_error.txt",
 ) -> None:
@@ -87,7 +87,7 @@ def _reset_error_file(path: str) -> None:
 def ftp_download(
     gca_list: Iterable[str],
     worker: int = 2,
-    download_path: str = "Data/",
+    download_path: str = "Example/output/",
     email: str = "a@email.address",
     error_log_path: str = "link_download_error.txt",
 ) -> None:
@@ -109,7 +109,7 @@ def ftp_download(
 def ftp_re_download(
     error_file: str = "link_download_error.txt",
     worker: int = 2,
-    download_path: str = "Data/",
+    download_path: str = "Example/output/",
     email: str = "a@email.address",
     error_log_path: str = "link_download_error.txt",
 ) -> None:
@@ -265,7 +265,7 @@ def _enrich_one_json(json_file: Path, email: str) -> tuple[Dict[str, str], str]:
 
 
 def metadata_enrich(
-    json_path: str = "Data/jsons/",
+    json_path: str = "Example/output/jsons/",
     output_tsv: str = "metadata_enriched.tsv",
     worker: int = 2,
     email: str = "a@email.address",

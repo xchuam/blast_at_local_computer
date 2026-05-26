@@ -86,9 +86,9 @@ def sequential_blast_high_s(
 
 
 def blast(
-    blastdb_path: str = "Data/blast_db/",
-    query_path: str = "Data/example_query.fas",
-    blast_output_path: str = "Data/blast_output/",
+    blastdb_path: str = "Example/output/blast_db/",
+    query_path: str = "Example/input/example_query.fas",
+    blast_output_path: str = "Example/output/blast_output/",
     blast_bin: str = "blastn",
     E_value: float = 1e-5,
     process_num: int = 1,
@@ -100,6 +100,21 @@ def blast(
 
     os.makedirs(blast_output_path, exist_ok=True)
     missions = [os.path.join(blastdb_path, name) for name in os.listdir(blastdb_path)]
+    if process_num <= 1:
+        for db_path in missions:
+            sequential_blast_high(
+                query_path,
+                db_path,
+                blast_output_path,
+                blast_bin,
+                E_value,
+                1,
+            )
+        end_time = time.time()
+        print(f"final time usage {end_time - start_time}")
+        print(time.asctime())
+        return
+
     chunks = np.array_split(missions, process_num)
 
     with Manager() as manager:
